@@ -14,7 +14,7 @@ jobs:
   - script: |
       mkdir buildmacOS
       cd buildmacOS
-      cmake .. -Gxcode
+      cmake .. -GXcode
     displayName: 'Generate macOS solution'
 
   - script: |
@@ -22,28 +22,28 @@ jobs:
       xcodebuild -scheme TestApp build
     displayName: 'Build macOS'
     
-- job: win32    
-  pool:
-    vmImage: 'windows-latest'
-
-  steps:
-  - script: |
-      git submodule update --init --recursive
-    displayName: 'Checkout dependencies Windows'
-
-  - script: |
-      mkdir buildWin32
-      cd buildWin32
-      cmake ..
-    displayName: 'Generate Win32 solution'
-    
-  - task: MSBuild@1
-    inputs:
-      solution: 'buildWin32/BabylonNative.sln'
-      maximumCpuCount: true
-      configuration: 'Release'
-    displayName: 'Build WIN32'
-  
+#- job: win32    
+#  pool:
+#    vmImage: 'windows-latest'
+#
+#  steps:
+#  - script: |
+#      git submodule update --init --recursive
+#    displayName: 'Checkout dependencies Windows'
+#
+#  - script: |
+#      mkdir buildWin32
+#      cd buildWin32
+#      cmake ..
+#    displayName: 'Generate Win32 solution'
+#    
+#  - task: MSBuild@1
+#    inputs:
+#      solution: 'buildWin32/BabylonNative.sln'
+#      maximumCpuCount: true
+#      configuration: 'Release'
+#    displayName: 'Build WIN32'
+#  
 #- job: uwp    
 #  pool:
 #    vmImage: 'windows-latest'  
