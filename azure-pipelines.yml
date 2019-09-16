@@ -1,6 +1,8 @@
 trigger:
 - master
 
+jobs:
+- job: BabylonNative
 
 pool:
   vmImage: 'macOS-10.14'
