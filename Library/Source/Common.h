@@ -1,5 +1,5 @@
 #pragma once
-#include <math.h>  
+#include <cmath>  
 #include <arcana/threading/dispatcher.h>
 
 #ifdef __APPLE__

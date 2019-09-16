@@ -4,7 +4,7 @@ trigger:
 jobs:
 - job: macOS
   pool:
-    vmImage: 'macOS-10.13'
+    vmImage: 'macOS-10.14'
     
   steps:
   - script: |
@@ -21,7 +21,7 @@ jobs:
     inputs:
       xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
       scheme: 'TestApp'
-      sdk: 'macosx10.13'
+      sdk: 'macosx10.14'
     displayName: 'Build macOS'
     
 #- job: win32    
