@@ -18,6 +18,7 @@ jobs:
     displayName: 'Generate macOS solution'
 
   - task: Xcode@5
+    inputs:
       xcWorkspacePath: 'buildmacOS'
       scheme: 'TestApp'
     displayName: 'Build macOS'
