@@ -2,50 +2,57 @@ trigger:
 - master
 
 jobs:
-- job: BabylonNative
+- job: macOS
+  pool:
+    vmImage: 'macOS-10.14'
+    
+  steps:
+  - script: |
+      git submodule update --init --recursive
+    displayName: 'Checkout dependencies'
+      
+  - script: |
+      mkdir buildmacOS
+      cd buildmacOS
+      cmake .. -Gxcode
+    displayName: 'Generate macOS solution'
 
-pool:
-  vmImage: 'macOS-10.14'
+  - script: |
+      cd buildmacOS
+      xcodebuild -scheme TestApp build
+    displayName: 'Build macOS'
+    
+- job: win32    
+  pool:
+    vmImage: 'windows-latest'
 
-steps:
-- script: |
-    git submodule update --init --recursive
-  displayName: 'Checkout dependencies macOS'
+  steps:
+  - script: |
+      git submodule update --init --recursive
+    displayName: 'Checkout dependencies Windows'
+
+  - script: |
+      mkdir buildWin32
+      cd buildWin32
+      cmake ..
+    displayName: 'Generate Win32 solution'
+    
+  - task: MSBuild@1
+    inputs:
+      solution: 'buildWin32/BabylonNative.sln'
+      maximumCpuCount: true
+      configuration: 'Release'
+    displayName: 'Build WIN32'
   
-- script: |
-    mkdir buildmacOS
-    cd buildmacOS
-    cmake .. -Gxcode
-  displayName: 'Generate macOS solution'
-
-- script: |
-    cd buildmacOS
-    xcodebuild -scheme TestApp build
-  displayName: 'Build macOS'
-    
-    
-    
-pool:
-  vmImage: 'windows-latest'
-
-steps:
-- script: |
-    git submodule update --init --recursive
-  displayName: 'Checkout dependencies Windows'
-
-- script: |
-    mkdir buildWin32
-    cd buildWin32
-    cmake ..
-  displayName: 'Generate Win32 solution'
-    
-- task: MSBuild@1
-  inputs:
-    solution: 'buildWin32/BabylonNative.sln'
-    maximumCpuCount: true
-    configuration: 'Release'
-  displayName: 'Build WIN32'
-  
+#- job: uwp    
+#  pool:
+#    vmImage: 'windows-latest'  
+#    
+#  steps:
+#  - script: |
+#      git submodule update --init --recursive
+#    displayName: 'Checkout dependencies Windows'
+#    
 #- script: |
 #    mkdir buildUWP
 #    cd buildUWP
