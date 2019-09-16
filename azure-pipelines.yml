@@ -19,8 +19,9 @@ jobs:
 
   - task: Xcode@5
     inputs:
-      xcWorkspacePath: 'buildmacOS'
+      xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
       scheme: 'TestApp'
+      sdk: 'macosx10.14'
     displayName: 'Build macOS'
     
 #- job: win32    
