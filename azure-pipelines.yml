@@ -17,9 +17,9 @@ jobs:
       cmake .. -GXcode
     displayName: 'Generate macOS solution'
 
-  - script: |
-      cd buildmacOS
-      xcodebuild -scheme TestApp build
+  - task: Xcode@5
+      xcWorkspacePath: 'buildmacOS'
+      scheme: 'TestApp'
     displayName: 'Build macOS'
     
 #- job: win32    
@@ -29,7 +29,7 @@ jobs:
 #  steps:
 #  - script: |
 #      git submodule update --init --recursive
-#    displayName: 'Checkout dependencies Windows'
+#    displayName: 'Checkout dependencies'
 #
 #  - script: |
 #      mkdir buildWin32
@@ -51,7 +51,7 @@ jobs:
 #  steps:
 #  - script: |
 #      git submodule update --init --recursive
-#    displayName: 'Checkout dependencies Windows'
+#    displayName: 'Checkout dependencies'
 #    
 #- script: |
 #    mkdir buildUWP
