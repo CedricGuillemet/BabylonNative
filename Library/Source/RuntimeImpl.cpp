@@ -1,3 +1,4 @@
+#include <cmath>
 #include "RuntimeImpl.h"
 #include "NativeEngine.h"
 #include "Console.h"
