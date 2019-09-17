@@ -18,13 +18,13 @@ jobs:
     displayName: 'Generate macOS solution'
   - task: CmdLine@2
     inputs:
-      script: 'sudo xcode-select --switch /Applications/Xcode_10.4.app/Contents/Developer'
+      script: 'sudo xcode-select --switch /Applications/Xcode_10.app/Contents/Developer'
       
   - task: Xcode@5
     inputs:
       xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
       scheme: 'TestApp'
-      sdk: 'macosx10.4'
+      sdk: 'macosx10'
       useXcpretty: false
     displayName: 'Build macOS'
     
