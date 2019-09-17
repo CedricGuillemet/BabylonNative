@@ -16,7 +16,10 @@ jobs:
       cd buildmacOS
       cmake .. -GXcode
     displayName: 'Generate macOS solution'
-
+  - task: CmdLine@2
+    inputs:
+      script: 'sudo xcode-select --switch /Applications/Xcode_9.4.1.app/Contents/Developer'
+      
   - task: Xcode@5
     inputs:
       xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
