@@ -22,6 +22,7 @@ jobs:
       xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
       scheme: 'TestApp'
       sdk: 'macosx10.14'
+      useXcpretty: false
     displayName: 'Build macOS'
     
 #- job: win32    
