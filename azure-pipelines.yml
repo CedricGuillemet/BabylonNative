@@ -24,7 +24,7 @@ jobs:
     inputs:
       xcWorkspacePath: 'buildmacOS/BabylonNative.xcodeproj'
       scheme: 'TestApp'
-      sdk: 'macosx9.4'
+      sdk: 'macosx9.4.1'
       useXcpretty: false
     displayName: 'Build macOS'
     
