@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED TRUE)
 project(BabylonNative)
 
 set(SUPPORTED_PLATFORMS "Win32" "UWP" "Android" "Apple")
