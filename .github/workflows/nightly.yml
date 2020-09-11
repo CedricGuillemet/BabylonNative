@@ -1,0 +1,42 @@
+name: Nightly build
+
+on: #  change here for cron 
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - script: |
+        git submodule update --init --recursive
+    displayName: 'Checkout dependencies'
+
+    - script: |
+        mkdir buildWin32_x64
+        cd buildWin32_x64
+        cmake -G "Visual Studio 16 2019" -A x64 ..
+      displayName: 'Generate Win32_x64 solution'
+    
+    - task: MSBuild@1
+      inputs:
+        solution: 'buildWin32_x64/BabylonNative.sln'
+        maximumCpuCount: true
+        configuration: 'Release'
+      displayName: 'Nightly Build WIN32_x64'
+    - script: |
+        cd buildWin32_x64\Apps\ValidationTests
+        mkdir Results
+        mkdir Errors
+        cd Release
+        ValidationTests
+      displayName: 'Nightly Validation Tests'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        artifactName: 'Win32_x64 Rendered Pictures'
+        pathtoPublish: 'buildWin32_x64/Apps/ValidationTests/Results'
+      displayName: 'Publish Nightly Tests Win32_x64 Results'
+      
