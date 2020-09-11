@@ -13,14 +13,12 @@ jobs:
     steps:
     - script: |
         git submodule update --init --recursive
-    displayName: 'Checkout dependencies'
-
+      displayName: 'Checkout dependencies'
     - script: |
         mkdir buildWin32_x64
         cd buildWin32_x64
         cmake -G "Visual Studio 16 2019" -A x64 ..
       displayName: 'Generate Win32_x64 solution'
-    
     - task: MSBuild@1
       inputs:
         solution: 'buildWin32_x64/BabylonNative.sln'
