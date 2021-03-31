@@ -117,6 +117,22 @@ namespace java::lang
         return str;
     }
 
+    StringArray::StringArray(jobject array)
+        : m_env{GetEnvForCurrentThread()}
+        , m_stringArray(static_cast<jobjectArray>(array))
+    {
+    }
+
+    size_t StringArray::GetArrayLength() const
+    {
+        return m_env->GetArrayLength(m_stringArray);
+    }
+
+    String StringArray::GetObjectArrayElement(size_t index) const
+    {
+        return {(jstring)m_env->GetObjectArrayElement(m_stringArray, index)};
+    }
+
     Throwable::Throwable(jthrowable throwable)
         : Object{throwable}
         , m_throwableRef{m_env->NewGlobalRef(throwable)}
@@ -383,6 +399,41 @@ namespace android::view
     }
 }
 
+namespace android::os
+{
+    HandlerThread::HandlerThread(java::lang::String name)
+        : Object{"android/os/HandlerThread"}
+    {
+        m_object = m_env->NewObject(m_class, m_env->GetMethodID(m_class, "<init>", "(Ljava/lang/String;)V"), (jstring)name);
+    }
+
+    void HandlerThread::Start()
+    {
+        m_env->CallVoidMethod(m_class, m_env->GetMethodID(m_class, "start", "()V"));
+    }
+
+    void HandlerThread::Join()
+    {
+        m_env->CallVoidMethod(m_class, m_env->GetMethodID(m_class, "join", "()V"));
+    }
+
+    Looper HandlerThread::getLooper()
+    {
+        return m_env->CallObjectMethod(m_class, m_env->GetMethodID(m_class, "getLooper", "()Landroid/os/Looper;"));
+    }
+
+    Looper::Looper(jobject object)
+        : Object{object}
+    {
+    }
+
+    Handler::Handler(Looper looper)
+        : Object{"android/os/Handler"}
+    {
+        m_object = m_env->NewObject(m_class, m_env->GetMethodID(m_class, "<init>", "(Landroid/os/Looper;)V"), looper);
+    }
+}
+
 namespace android::net
 {
     Uri::Uri(jobject object)
@@ -426,4 +477,76 @@ namespace android::graphics
             m_env->CallVoidMethod(m_object, m_env->GetMethodID(m_class, "updateTexImage", "()V"));
         }
     }
+}
+
+namespace android::hardware::camera2
+{
+    CaptureRequest::Builder CameraDevice::createCaptureRequest(int templateType)
+    {
+        return {m_env->CallObjectMethod(m_object, m_env->GetMethodID(m_class, "createCaptureRequest", "(I)Landroid/hardware/camera2/CaptureRequest$Builder;"), templateType)};
+    }
+
+    void CameraDevice::createCaptureSession(Params::SessionConfiguration config)
+    {
+        m_env->CallVoidMethod(m_object, m_env->GetMethodID(m_class, "createCaptureSession", "(Landroid/hardware/camera2/params/SessionConfiguration;)V"), config);
+    }
+
+    void CameraDevice::close()
+    {
+        m_env->CallVoidMethod(m_object, m_env->GetMethodID(m_class, "close", "()V"));
+    }
+
+    template <>
+    int CameraCharacteristics::get(const char* fieldName)
+    {
+        jfieldID field = m_env->GetStaticFieldID(m_class, fieldName, "Landroid/hardware/camera2/CameraCharacteristics$Key;");
+        if (field)
+        {
+            auto key{m_env->GetStaticObjectField(m_class, field)};
+            auto getMethod{m_env->GetMethodID(m_class, "get", "(Landroid/hardware/camera2/CameraCharacteristics$Key;)Ljava/lang/Object;")};
+            auto value{m_env->CallObjectMethod(m_object, getMethod, key)};
+            auto classInteger{m_env->FindClass("java/lang/Integer")};
+            auto intValue{m_env->CallIntMethod(value, m_env->GetMethodID(classInteger, "intValue", "()I"))};
+            return intValue;
+        }
+        return 0;
+    }
+
+    void CameraCaptureSession::close()
+    {
+        m_env->CallVoidMethod(m_object, m_env->GetMethodID(m_class, "close", "()V"));
+    }
+
+    void CameraManager::openCamera(java::lang::String cameraId, java::BabylonNative::BabylonNativeCameraStateCallback callback, android::os::Handler handler)
+    {
+        jmethodID method{m_env->GetMethodID(m_class, "openCamera", "(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V")};
+        m_env->CallVoidMethod(m_object, method, jstring{cameraId}, (jobject)callback, handler);
+    }
+
+    java::lang::StringArray CameraManager::getCameraIdList()
+    {
+        return {m_env->CallObjectMethod(m_object, m_env->GetMethodID(m_class, "getCameraIdList", "()[Ljava/lang/String;"))};
+    }
+
+    CameraCharacteristics CameraManager::getCameraCharacteristics(java::lang::String cameraId)
+    {
+        jmethodID method{m_env->GetMethodID(m_class, "getCameraCharacteristics", "(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;")};
+        return m_env->CallObjectMethod(m_object, method, jstring{cameraId});
+    }
+
+}
+
+JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
+{
+    JNIEnv* env = NULL;
+    jint result = -1;
+    
+	if (vm->GetEnv((void**) &env, JNI_VERSION_1_6) != JNI_OK) {
+        return result;
+    }
+
+    java::BabylonNative::BabylonNativeCameraStateCallback::callbackClass = env->FindClass("BabylonNative/CameraStateCallback");
+    java::BabylonNative::BabylonNativeCameraStateCallback::newMethod = env->GetMethodID(java::BabylonNative::BabylonNativeCameraStateCallback::callbackClass, "<init>", "(J)V");
+
+    return JNI_VERSION_1_6;
 }

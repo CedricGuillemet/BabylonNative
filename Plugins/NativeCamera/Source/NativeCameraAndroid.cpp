@@ -1,6 +1,7 @@
 #include <napi/napi.h>
 #include "NativeCamera.h"
 #include <string>
+
 #include <camera/NdkCameraManager.h>
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraDevice.h>
@@ -11,6 +12,7 @@
 #include <camera/NdkCameraWindowType.h>
 #include <camera/NdkCaptureRequest.h>
 #include <media/NdkImageReader.h>
+
 #include <android/native_window_jni.h>
 #include <AndroidExtensions/JavaWrappers.h>
 #include <AndroidExtensions/Globals.h>
@@ -27,6 +29,13 @@
 
 using namespace android;
 using namespace android::global;
+using namespace android::hardware::camera2;
+using namespace android::graphics;
+using namespace android::view;
+using namespace android::content;
+using namespace android::os;
+using namespace java::lang;
+using namespace java::BabylonNative;
 
 namespace Babylon::Plugins::Internal
 {
@@ -59,6 +68,11 @@ namespace Babylon::Plugins::Internal
             }
         )"};
 
+        void CameraDeviceStateClosed();
+        void CameraDeviceStateDisconnected();
+        void CameraDeviceStateError(int /*errorCode*/);
+        void CameraDeviceStateOpened(jobject /*cameraDevice*/);
+
     private:
 
         std::string getCamId(bool frontCamera);
@@ -68,22 +82,28 @@ namespace Babylon::Plugins::Internal
 
         uint32_t width;
         uint32_t height;
-        ACameraManager *cameraManager{};
-        ACameraDevice *cameraDevice{};
-        ACameraOutputTarget *textureTarget{};
+        CameraManager cameraManager;
+        CameraDevice cameraDevice{};
+        CameraCaptureSession cameraCaptureSession{};
+
+        HandlerThread backgroundThread{};
+        //CameraDevice::StateCallback stateCallback;
+
+        /*ACameraOutputTarget *textureTarget{};
         ACaptureRequest *request{};
         ANativeWindow *textureWindow{};
         ACameraCaptureSession *textureSession{};
         ACaptureSessionOutput *textureOutput{};
         ACaptureSessionOutput *output{};
         ACaptureSessionOutputContainer *outputs{};
+        */
         GLuint cameraOESTextureId{};
         GLuint cameraRGBATextureId{};
         GLuint cameraShaderProgramId{};
         GLuint frameBufferId{};
 
-        android::graphics::SurfaceTexture surfaceTexture;
-        android::view::Surface surface;
+        SurfaceTexture surfaceTexture;
+        Surface surface;
 
         EGLContext context{};
         EGLDisplay display{};
@@ -91,35 +111,30 @@ namespace Babylon::Plugins::Internal
 
     std::string CameraInterfaceAndroid::getCamId(bool frontCamera)
     {
-        ACameraIdList *cameraIds = nullptr;
-        ACameraManager_getCameraIdList(cameraManager, &cameraIds);
+        StringArray cameraIds = cameraManager.getCameraIdList();
 
         std::string cameraId;
+        auto cameraIdLength{cameraIds.GetArrayLength()};
 
-        for (int i = 0; i < cameraIds->numCameras; ++i)
+        for (size_t i = 0; i < cameraIdLength; ++i)
         {
-            const char *id = cameraIds->cameraIds[i];
+            const std::string id{cameraIds.GetObjectArrayElement(i)};
 
-            ACameraMetadata *metadataObj;
-            ACameraManager_getCameraCharacteristics(cameraManager, id, &metadataObj);
+            CameraCharacteristics cameraCharacteristics{cameraManager.getCameraCharacteristics(id.c_str())};
 
-            ACameraMetadata_const_entry lensInfo = {};
-            ACameraMetadata_getConstEntry(metadataObj, ACAMERA_LENS_FACING, &lensInfo);
-
-            auto facing = static_cast<acamera_metadata_enum_android_lens_facing_t>(lensInfo.data.u8[0]);
+            auto facing{cameraCharacteristics.get<int>("LENS_FACING")};
 
             // Found a corresponding facing camera?
-            if (facing == (frontCamera ? ACAMERA_LENS_FACING_FRONT : ACAMERA_LENS_FACING_BACK))
+            if (facing == (frontCamera ? CameraCharacteristics::LENS_FACING_FRONT : CameraCharacteristics::LENS_FACING_BACK))
             {
                 cameraId = id;
                 break;
             }
         }
 
-        ACameraManager_deleteCameraIdList(cameraIds);
         return cameraId;
     }
-
+#if 0
     // device callbacks
     static void onDisconnected(void* /*context*/, ACameraDevice* /*device*/)
     {
@@ -182,7 +197,7 @@ namespace Babylon::Plugins::Internal
         .onCaptureSequenceAborted = onCaptureSequenceAborted,
         .onCaptureBufferLost = nullptr,
     };
-
+#endif
     arcana::task<void, std::exception_ptr> CheckCameraPermissionAsync()
     {
         auto task{ arcana::task_from_result<std::exception_ptr>() };
@@ -239,6 +254,7 @@ namespace Babylon::Plugins::Internal
         , m_runtimeScheduler{JsRuntime::GetFromJavaScript(env)}
         , width{width}
         , height{height}
+        , cameraManager{GetAppContext().getSystemService<CameraManager>()}
     {
         CheckCameraPermissionAsync().then(arcana::inline_scheduler, arcana::cancellation::none(), [this, frontCamera]()
         {
@@ -298,13 +314,18 @@ namespace Babylon::Plugins::Internal
             cameraShaderProgramId = android::OpenGLHelpers::CreateShaderProgram(CAMERA_VERT_SHADER, CAMERA_FRAG_SHADER);
 
             // Create the surface and surface texture that will receive the camera preview
-            surfaceTexture.initWithTexture(cameraOESTextureId);
-            surface.initWithSurfaceTexture(surfaceTexture);
+            //surfaceTexture.initWithTexture(cameraOESTextureId);
+            //surface.initWithSurfaceTexture(surfaceTexture);
 
             // open the front or back camera
-            cameraManager = ACameraManager_create();
+             //ACameraManager_create();
             auto id = getCamId(frontCamera);
-            ACameraManager_openCamera(cameraManager, id.c_str(), &cameraDeviceCallbacks, &cameraDevice);
+
+            HandlerThread backgroundThread2{"CameraBackgroundThread"};
+
+            cameraManager.openCamera(id.c_str(), BabylonNativeCameraStateCallback(this), Handler{backgroundThread2.getLooper()});
+            
+            /*ACameraManager_openCamera(cameraManager, id.c_str(), &cameraDeviceCallbacks, &cameraDevice);
 
             textureWindow = surface.getNativeWindow();
 
@@ -326,7 +347,7 @@ namespace Babylon::Plugins::Internal
 
             // Start capturing continuously
             ACameraCaptureSession_setRepeatingRequest(textureSession, &captureCallbacks, 1, &request, nullptr);
-
+*/
             if (eglMakeCurrent(display, 0/*surface*/, 0/*surface*/, currentContext) == EGL_FALSE)
             {
                 throw std::runtime_error{"Unable to restore GL context for camera texture init."};
@@ -337,7 +358,7 @@ namespace Babylon::Plugins::Internal
     CameraInterfaceAndroid::~CameraInterfaceAndroid()
     {
         // Stop recording to SurfaceTexture and do some cleanup
-        ACameraCaptureSession_stopRepeating(textureSession);
+        /*ACameraCaptureSession_stopRepeating(textureSession);
         ACameraCaptureSession_close(textureSession);
         ACaptureSessionOutputContainer_free(outputs);
         ACaptureSessionOutput_free(output);
@@ -348,7 +369,9 @@ namespace Babylon::Plugins::Internal
         // Capture request for SurfaceTexture
         ANativeWindow_release(textureWindow);
         ACaptureRequest_free(request);
-
+*/
+        cameraCaptureSession.close();
+        cameraDevice.close();
         if (context)
         {
             eglDestroyContext(display, context);
@@ -397,6 +420,74 @@ namespace Babylon::Plugins::Internal
         });
     }
 
+    void CameraInterfaceAndroid::CameraDeviceStateClosed()
+    {
+    }
+
+    void CameraInterfaceAndroid::CameraDeviceStateDisconnected()
+    {
+    }
+
+    void CameraInterfaceAndroid::CameraDeviceStateError(int /*errorCode*/)
+    {
+    }
+
+    void CameraInterfaceAndroid::CameraDeviceStateOpened(jobject /*cameraDevice*/)
+    {
+    }
+
+/*
+    public static native void NativeCameraClosed(CameraDevice camera, long interfacePtr);
+    public static native void NativeCameraDisconnected(CameraDevice camera, long interfacePtr);
+    public static native void NativeCameraError(CameraDevice camera, int error, long interfacePtr);
+    public static native void NativeCameraOpened(CameraDevice camera, long interfacePtr);
+*/
+    JNIEXPORT void JNICALL Java_BabylonNative_CameraStateCallback_NativeCameraClosed(JNIEnv*, jobject, jobject, jlong host)
+    {
+        if (auto* cameraInterfaceAndroid = reinterpret_cast<CameraInterfaceAndroid*>(host))
+        {
+            cameraInterfaceAndroid->CameraDeviceStateClosed();
+        }
+    }
+
+    JNIEXPORT void JNICALL Java_BabylonNative_CameraStateCallback_NativeCameraDisconnected(JNIEnv*, jobject, jobject, jlong host)
+    {
+        if (auto* cameraInterfaceAndroid = reinterpret_cast<CameraInterfaceAndroid*>(host))
+        {
+            cameraInterfaceAndroid->CameraDeviceStateDisconnected();
+        }
+    }
+
+    JNIEXPORT void JNICALL Java_BabylonNative_CameraStateCallback_NativeCameraError(JNIEnv*, jobject, jobject, jint error, jlong host)
+    {
+        if (auto* cameraInterfaceAndroid = reinterpret_cast<CameraInterfaceAndroid*>(host))
+        {
+            cameraInterfaceAndroid->CameraDeviceStateError(error);
+        }
+    }
+
+    JNIEXPORT void JNICALL Java_BabylonNative_CameraStateCallback_NativeCameraOpened(JNIEnv*, jobject, jobject rawCamera, jlong host)
+    {
+        if (auto* cameraInterfaceAndroid = reinterpret_cast<CameraInterfaceAndroid*>(host))
+        {
+            //LocalRef<jobject> camera(getEnv()->NewLocalRef(rawCamera));
+
+            cameraInterfaceAndroid->CameraDeviceStateOpened(rawCamera);
+        }
+    }
+/*
+    JNIEXPORT void JNICALL cameraDeviceStateClosedCallback(JNIEnv*, jobject, jlong host, jobject)
+
+
+    JNIEXPORT void JNICALL cameraDeviceStateDisconnectedCallback(JNIEnv*, jobject, jlong host, jobject)
+   
+
+    JNIEXPORT void JNICALL cameraDeviceStateErrorCallback(JNIEnv*, jobject, jlong host, jobject, jint error)
+    
+
+    JNIEXPORT void JNICALL cameraDeviceStateOpenedCallback(JNIEnv*, jobject, jlong host, jobject rawCamera)
+    
+*/
     std::unique_ptr<CameraInterface> CameraInterface::CreateInterface(Napi::Env env, uint32_t width, uint32_t height, bool frontCamera)
     {
         return std::unique_ptr<CameraInterface>(new CameraInterfaceAndroid(env, width, height, frontCamera));

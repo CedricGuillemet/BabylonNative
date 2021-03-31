@@ -20,7 +20,6 @@ if (APPLE OR ANDROID OR (WIN32 AND NOT WINDOWS_STORE))
 
     if(ANDROID)
         set(EXTENSIONS AndroidExtensions
-            camera2ndk
             mediandk)
     elseif(APPLE)
         set(EXTENSIONS "-framework CoreMedia -framework AVFoundation")
