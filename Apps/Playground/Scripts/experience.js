@@ -17,8 +17,62 @@ var text = false;
 var hololens = false;
 var cameraTexture = false;
 
+var baseAssetPath = "app:///";
+
+
+// create materials for scene meshes
+
+var materialsTest = [];
+var materialsTestIndex = 0;
+const materials = {};
+function createMaterials() {
+
+    console.log("INIT C");
+    materials.shadowTexture = new BABYLON.Texture(baseAssetPath + "assets/textures/planet_shadow.jpg", scene, false, false);
+    BABYLON.NodeMaterial.ParseFromFileAsync("", baseAssetPath + "assets/shaders/planetLightingShader.json", scene).then(function (planmat) {
+        
+        materials.planet = planmat;
+        materials.planet.build(false);
+        materials.planetBaseColor = materials.planet.getBlockByName("baseColorTex");
+        materials.planetRoughness = materials.planet.getBlockByName("roughnessTex");
+        materials.planetNormal = materials.planet.getBlockByName("normalTex");
+        materials.planetShadow = materials.planet.getBlockByName("shadowTex");
+        materials.planetBaseColor.texture = meshes.planet.material.albedoTexture;
+        materials.planetRoughness.texture = meshes.planet.material.metallicTexture;
+        materials.planetNormal.texture = meshes.planet.material.bumpTexture;
+        //materials.planetShadow.texture = materials.shadowTexture;
+
+        materialsTest.push(meshes.planet.material);
+        materialsTest.push(materials.planet);
+        //meshes.planet.material = materials.planet;
+
+        console.log("WTF 002");
+    });
+}
+
+// load or create meshes in scene
+const meshes = {};
+function loadMeshes() {
+
+    meshes.planetGlb = BABYLON.SceneLoader.AppendAsync(baseAssetPath + "assets/gltf/planetV2_mesh.glb").then(function (sc) {
+        meshes.planet = scene.getMeshByName("planet_mesh");
+        scene.getMeshByName("atmosphereSphere_mesh").setEnabled(false);
+
+        // mesh setup
+        meshes.planetRoot = meshes.planet.parent;
+        meshes.pivot = new BABYLON.AbstractMesh("pivot", scene);
+        meshes.lightSource = new BABYLON.AbstractMesh("lightSource", scene);
+        meshes.lightSource.position = new BABYLON.Vector3(5, 0, 2);
+        meshes.lightSource.parent = meshes.pivot;
+
+        createMaterials();
+    });
+}
 function CreateBoxAsync(scene) {
-    BABYLON.Mesh.CreateBox("box1", 0.2, scene);
+    /*var box = BABYLON.Mesh.CreateBox("box1", 0.2, scene);
+    var mat = new BABYLON.StandardMaterial("mat", scene);
+    mat.diffuseTexture = new BABYLON.Texture("https://raw.githubusercontent.com/CedricGuillemet/dump/master/UVMap.png", scene, false);
+    box.material = mat;*/
     return Promise.resolve();
 }
 
@@ -60,16 +114,46 @@ CreateBoxAsync(scene).then(function () {
 //BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF/CesiumMan.gltf").then(function () {
 //BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/ClearCoatTest/glTF/ClearCoatTest.gltf").then(function () {
     BABYLON.Tools.Log("Loaded");
-
+    /*
     scene.createDefaultCamera(true, true, true);
     scene.activeCamera.alpha += Math.PI;
-
+    
     if (ibl) {
         scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
     }
     else {
         scene.createDefaultLight(true);
     }
+    */
+    
+    _native.RootUrl = "app:///";
+    scene.clearColor = new BABYLON.Color3.FromInts(0.1, 0.1, 0.1);
+
+    // standard ArcRotate camera
+    var camera = new BABYLON.ArcRotateCamera("camera", 1.093, 1.502, 0.8, new BABYLON.Vector3(0.0, 0.0, 0.0), scene);
+    camera.minZ = 0.01;
+
+    // sun directional
+    var sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-1, -0.1, 0));
+    sun.intensity = 3.0;
+
+
+    loadMeshes();
+
+    scene.onPointerObservable.add(({ event }) => {
+        meshes.planet.material = materialsTest[materialsTestIndex];
+        materialsTestIndex++;
+        materialsTestIndex %= 2;
+    }, BABYLON.PointerEventTypes.POINTERDOWN);
+
+    
+    /*
+    BABYLON.NodeMaterial.ParseFromSnippetAsync("P43K4C#0", scene).then((nodeMaterial) => {
+        var box = BABYLON.Mesh.CreateBox("box1", 0.2, scene);
+        box.material = nodeMaterial;
+    });
+    */
+    
 
     if (cameraTexture) {
         var cameraBox = BABYLON.Mesh.CreateBox("box1", 0.25);
