@@ -17,6 +17,15 @@ set(SCRIPTS
     "Scripts/experience.js"
     "Scripts/playground_runner.js")
 
+set(ASSETS "Assets/nativeStaticScene.glb"
+    "Assets/starfield_panorama_texture.jpg"
+    "Assets/starfieldShader.json"
+    "Assets/starsGeo.glb"
+    "Assets/sun.png"
+    "Assets/environment.env"
+    "Assets/planetImage.png"
+    )
+
 if(APPLE)
     find_library(JSCORE_LIBRARY JavaScriptCore)
     if(IOS)
@@ -25,7 +34,7 @@ if(APPLE)
         set(STORYBOARD
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/Main.storyboard"
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/LaunchScreen.storyboard")
-        set(RESOURCE_FILES ${STORYBOARD} ${SCRIPTS})
+        set(RESOURCE_FILES ${STORYBOARD} ${SCRIPTS} ${ASSETS})
         set(ADDITIONAL_LIBRARIES PRIVATE z NativeXr)
         set(SOURCES
             ${SOURCES}
@@ -34,10 +43,11 @@ if(APPLE)
             "iOS/LibNativeBridge.h"
             "iOS/LibNativeBridge.mm")
         set_source_files_properties(${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES} PROPERTIES MACOSX_PACKAGE_LOCATION "Scripts")
+        set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Assets")
     else()
         set(PLIST_FILE "${CMAKE_CURRENT_LIST_DIR}/macOS/Info.plist")
         set(STORYBOARD "${CMAKE_CURRENT_LIST_DIR}/macOS/Base.lproj/Main.storyboard")
-        set(RESOURCE_FILES ${STORYBOARD})
+        set(RESOURCE_FILES ${STORYBOARD} ${ASSETS})
         set(SOURCES
             ${SOURCES}
             "macOS/main.m"
@@ -46,6 +56,7 @@ if(APPLE)
             "macOS/ViewController.mm"
             "macOS/ViewController.h")
         set_source_files_properties(${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/Scripts")
+        set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Assets")
     endif()
     set(ADDITIONAL_LIBRARIES ${ADDITIONAL_LIBRARIES}
         PRIVATE ${JSCORE_LIBRARY}
@@ -90,9 +101,9 @@ endif()
 
 if(WIN32)
     set(WIN32_EXECUTABLE TRUE)
-    add_executable(Playground WIN32 ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    add_executable(Playground WIN32 ${BABYLON_SCRIPTS} ${ASSETS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
 else()
-    add_executable(Playground ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    add_executable(Playground ${BABYLON_SCRIPTS} ${ASSETS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
 endif()
 
 warnings_as_errors(Playground)
@@ -179,6 +190,15 @@ else()
         add_custom_command(
             OUTPUT "${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
             COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
+            COMMENT "Copying ${SCRIPT_NAME}"
+            MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}")
+    endforeach()
+
+    foreach(SCRIPT ${ASSETS})
+        get_filename_component(SCRIPT_NAME "${SCRIPT}" NAME)
+        add_custom_command(
+            OUTPUT "${CMAKE_CFG_INTDIR}/Assets/${SCRIPT_NAME}"
+            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Assets/${SCRIPT_NAME}"
             COMMENT "Copying ${SCRIPT_NAME}"
             MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}")
     endforeach()

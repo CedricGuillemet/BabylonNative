@@ -3,343 +3,196 @@
 /// <reference path="../../node_modules/babylonjs-materials/babylonjs.materials.module.d.ts" />
 /// <reference path="../../node_modules/babylonjs-gui/babylon.gui.module.d.ts" />
 
-var wireframe = false;
-var turntable = false;
-var logfps = true;
-var ibl = false;
-var rtt = false;
-var vr = false;
-var ar = false;
-var xrHitTest = false;
-var xrFeaturePoints = false;
-var meshDetection = false;
-var text = false;
-var hololens = false;
-var cameraTexture = false;
-var imageTracking = false;
-
-function CreateBoxAsync(scene) {
-    BABYLON.Mesh.CreateBox("box1", 0.2, scene);
-    return Promise.resolve();
-}
-
-function CreateSpheresAsync(scene) {
-    var size = 12;
-    for (var i = 0; i < size; i++) {
-        for (var j = 0; j < size; j++) {
-            for (var k = 0; k < size; k++) {
-                var sphere = BABYLON.Mesh.CreateSphere("sphere" + i + j + k, 32, 0.9, scene);
-                sphere.position.x = i;
-                sphere.position.y = j;
-                sphere.position.z = k;
-            }
-        }
-    }
-
-    return Promise.resolve();
-}
 
 var engine = new BABYLON.NativeEngine();
 var scene = new BABYLON.Scene(engine);
 
-CreateBoxAsync(scene).then(function () {
-//CreateSpheresAsync(scene).then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Box/glTF/Box.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxTextured/glTF/BoxTextured.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Suzanne/glTF/Suzanne.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Avocado/glTF/Avocado.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoomBox/glTF/BoomBox.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Sponza/glTF/Sponza.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BrainStem/glTF/BrainStem.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/FlightHelmet/glTF/FlightHelmet.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/EnvironmentTest/glTF/EnvironmentTest.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxAnimated/glTF/BoxAnimated.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/AnimatedMorphCube/glTF/AnimatedMorphCube.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/RiggedSimple/glTF/RiggedSimple.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/stevk/glTF-Asset-Generator/skins/Output/Animation_Skin/Animation_Skin_01.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/RiggedFigure/glTF/RiggedFigure.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF/CesiumMan.gltf").then(function () {
-//BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/ClearCoatTest/glTF/ClearCoatTest.gltf").then(function () {
-    BABYLON.Tools.Log("Loaded");
+BABYLON.Tools.Log("Loaded");
+/*
+scene.createDefaultCamera(true, true, true);
+scene.activeCamera.alpha += Math.PI;
 
-    scene.createDefaultCamera(true, true, true);
-    scene.activeCamera.alpha += Math.PI;
+if (ibl) {
+    scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
+}
+else {
+    scene.createDefaultLight(true);
+}
+*/
 
-    if (ibl) {
-        scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
-    }
-    else {
-        scene.createDefaultLight(true);
-    }
+var camera = new BABYLON.ArcRotateCamera("camera", 3.73, 1.28, 0.75, new BABYLON.Vector3(0.,0.5,0.), scene);
+camera.lowerRadiusLimit = 2.0;
+camera.upperRadiusLimit = 2.0;
 
-    if (cameraTexture) {
-        var cameraBox = BABYLON.Mesh.CreateBox("box1", 0.25);
-        var mat = new BABYLON.StandardMaterial("mat", scene);
-        mat.diffuseColor = BABYLON.Color3.Black();
+// This attaches the camera to the canvas
+//camera.attachControl(canvas, true);
+/*
+// This creates a light, aiming 0,1,0 - to the sky (non-mesh)
+var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
-        BABYLON.VideoTexture.CreateFromWebCam(scene, function (videoTexture) {
-            mat.emissiveTexture = videoTexture;
-            cameraBox.material = mat;
-        }, { maxWidth: 256, maxHeight: 256, facingMode: "environment" });
-    }
+// Default intensity is 1. Let's dim the light a small amount
+light.intensity = 0.7;
+*/
 
-    if (wireframe) {
-        var material = new BABYLON.StandardMaterial("wireframe", scene);
-        material.wireframe = true;
-        material.pointsCloud = true;
+// lighting
+const dirLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(0.47, 0.0, -0.86), scene);
+dirLight.diffuse = BABYLON.Color3.FromInts(255, 251, 199);
+dirLight.intensity = 3;
 
-        for (var index = 0; index < scene.meshes.length; index++) {
-            scene.meshes[0].material = material;
-        }
-    }
+var envCube = BABYLON.CubeTexture.CreateFromPrefilteredData("App:///Assets/environment.env", scene);
+envCube.name = "environment";
+envCube.gammaSpace = false;
+envCube.rotationY = 1.977;
 
-    if (rtt) {
-        var rttTexture = new BABYLON.RenderTargetTexture("rtt", 1024, scene);
-        scene.meshes.forEach(mesh => {
-            rttTexture.renderList.push(mesh);
-        });
-        rttTexture.activeCamera = scene.activeCamera;
-        rttTexture.vScale = -1;
+scene.environmentTexture = envCube;
 
-        scene.customRenderTargets.push(rttTexture);
+// glow
+const glowLayer = new BABYLON.GlowLayer("glowLayer", scene);
+glowLayer.intensity = 0.5;
 
-        var rttMaterial = new BABYLON.StandardMaterial("rttMaterial", scene);
-        rttMaterial.diffuseTexture = rttTexture;
+let skybox = BABYLON.SceneLoader.ImportMeshAsync("", "app:///Assets/", "starsGeo.glb").then(() => {
+    const starfield = scene.getMeshByName("starsGeo");
+    starfield.scaling = new BABYLON.Vector3(4500, 4500, 4500);
 
-        var plane = BABYLON.MeshBuilder.CreatePlane("rttPlane", { width: 4, height: 4 }, scene);
-        plane.position.y = 1;
-        plane.position.z = -5;
-        plane.rotation.y = Math.PI;
-        plane.material = rttMaterial;
-    }
+    BABYLON.NodeMaterial.ParseFromFileAsync("", "app:///Assets/starfieldShader.json", scene).then((nodeMaterial) => {
+        starfield.material = nodeMaterial;
+        var starfieldTextureBlock = nodeMaterial.getBlockByName("emissiveTex");
+        starfieldTextureBlock.texture = new BABYLON.Texture("app:///Assets/starfield_panorama_texture.jpg", scene, false, false);;
 
-    if (turntable) {
-        scene.beforeRender = function () {
-            scene.meshes[0].rotate(BABYLON.Vector3.Up(), 0.005 * scene.getAnimationRatio());
-        };
-    }
+        let spaceScene = BABYLON.SceneLoader.ImportMeshAsync("", "app:///Assets/", "nativeStaticScene.glb").then(() => {
 
-    if (logfps) {
-        var logFpsLoop = function () {
-            BABYLON.Tools.Log("FPS: " + Math.round(engine.getFps()));
-            window.setTimeout(logFpsLoop, 1000);
-        };
+            let asteroids = ["asteroidModule2_i30", "asteroidGroup187", "asteroidModule4_i82", "asteroidGroup106", "asteroidGroup84", "asteroidGroup74", "asteroidGroup73", "asteroidGroup65", "asteroidGroup87", "asteroidGroup61", "asteroidGroup104", "asteroidGroup105", "asteroidGroup127", "asteroidGroup141", "asteroidGroup135", "asteroidGroup129", "asteroidGroup126", "asteroidGroup100", "asteroidGroup63", "asteroidGroup81", "asteroidGroup72", "asteroidGroup102", "asteroidGroup26", "asteroidGroup235", "asteroidGroup78", "asteroidGroup88", "asteroidGroup3", "asteroidGroup7", "asteroidModule3_i148", "asteroidModule3_i117", "asteroidModule2_i107"];
 
-        window.setTimeout(logFpsLoop, 3000);
-    }
+            const frameRate = 10;
+            let rotationSpeedMin = 200;
+            let rotationSpeedMax = 700
 
-    engine.runRenderLoop(function () {
-        scene.render();
-    });
-
-    if (vr || ar || hololens) {
-        setTimeout(function () {
-            scene.createDefaultXRExperienceAsync({ disableDefaultUI: true, disableTeleportation: true }).then((xr) => {
-                if (xrHitTest) {
-                    // Create the hit test module. OffsetRay specifies the target direction, and entityTypes can be any combination of "mesh", "plane", and "point".
-                    const xrHitTestModule = xr.baseExperience.featuresManager.enableFeature(
-                        BABYLON.WebXRFeatureName.HIT_TEST,
-                        "latest",
-                        { offsetRay: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, entityTypes: ["mesh"] });
-
-                    // When we receive hit test results, if there were any valid hits move the position of the mesh to the hit test point.
-                    xrHitTestModule.onHitTestResultObservable.add((results) => {
-                        if (results.length) {
-                            scene.meshes[0].position.x = results[0].position.x;
-                            scene.meshes[0].position.y = results[0].position.y;
-                            scene.meshes[0].position.z = results[0].position.z;
-                        }
-                    });
-                }
-                else {
-                    setTimeout(function () {
-                        scene.meshes[0].position.z = 2;
-                        scene.meshes[0].rotate(BABYLON.Vector3.Up(), 3.14159);
-                    }, 5000);
+            for (each in asteroids) {
+                let asteroid = scene.getMeshByName(asteroids[each])
+                if (!asteroid) {
+                    asteroid = scene.getTransformNodeByName(asteroids[each])
                 }
 
-                // Showing visualization for ARKit LiDAR mesh data
-                if (meshDetection) {
-                    var mat = new BABYLON.StandardMaterial("mat", scene);
-                    mat.wireframe = true;
-                    mat.diffuseColor = BABYLON.Color3.Blue();
-                    const xrMeshes = xr.baseExperience.featuresManager.enableFeature(
-                        BABYLON.WebXRFeatureName.MESH_DETECTION,
-                        "latest",
-                        {convertCoordinateSystems: true});
-                    console.log("Enabled mesh detection.");
-                    const meshMap = new Map();
+                asteroid.rotationQuaternion = null;
 
-                    // adding meshes
-                    xrMeshes.onMeshAddedObservable.add(mesh=> {
-                        try {
-                            console.log("Mesh added.");
-                            // create new mesh object
-                            var customMesh = new BABYLON.Mesh("custom", scene);
-                            var vertexData = new BABYLON.VertexData();
-                            vertexData.positions = mesh.positions;
-                            vertexData.indices = mesh.indices;
-                            vertexData.normals = mesh.normals;
-                            vertexData.applyToMesh(customMesh, true);
-                            customMesh.material = mat;
-                            // add mesh and mesh id to map
-                            meshMap.set(mesh.id, customMesh);
-                        } catch (ex) {
-                            console.error(ex);
-                        }
-                    });
+                let parentTransform = new BABYLON.TransformNode("parent", scene);
+                parentTransform.parent = asteroid.parent;
+                parentTransform.position.copyFrom(asteroid.position);
+                asteroid.position.setAll(0);
+                asteroid.parent = parentTransform;
+                parentTransform.rotation = new BABYLON.Vector3(
+                    BABYLON.Scalar.RandomRange(-Math.PI, Math.PI),
+                    BABYLON.Scalar.RandomRange(-Math.PI, Math.PI),
+                    BABYLON.Scalar.RandomRange(-Math.PI, Math.PI)
+                );
 
-                    // updating meshes
-                    xrMeshes.onMeshUpdatedObservable.add(mesh=> {
-                        try {
-                            console.log("Mesh updated.");
-                            if (meshMap.has(mesh.id)) {
-                                var vertexData = new BABYLON.VertexData();
-                                vertexData.positions = mesh.positions;
-                                vertexData.indices = mesh.indices;
-                                vertexData.normals = mesh.normals;
-                                vertexData.applyToMesh(meshMap.get(mesh.id), true);
-                            }
-                        } catch (ex) {
-                            console.error(ex);
-                        }
-                    });
+                let rotationSpeed = Math.floor(Math.random() * (rotationSpeedMax - rotationSpeedMin + 1)) + rotationSpeedMin;
 
-                    // removing meshes
-                    xrMeshes.onMeshRemovedObservable.add(mesh => {
-                        try {
-                            console.log("Mesh removed.");
-                            if (meshMap.has(mesh.id)) {
-                                meshMap.get(mesh.id).dispose();
-                                meshMap.delete(mesh.id);
-                            }
-                        } catch (ex) {
-                            console.error(ex);
-                        }
-                    });
-                }
-
-                // Below is an example of how to process feature points.
-                if (xrFeaturePoints) {
-                    // First we attach the feature point system feature the XR experience.
-                    const xrFeaturePointsModule = xr.baseExperience.featuresManager.enableFeature(
-                        BABYLON.WebXRFeatureName.FEATURE_POINTS,
-                        "latest",
-                        {});
-
-                    // Next We create the point cloud system which we will use to display feature points.
-                    var pcs = new BABYLON.PointsCloudSystem("pcs", 5, scene);
-                    var featurePointInitFunc = function (particle, i, s) {
-                        particle.position = new BABYLON.Vector3(0, -5, 0);
-                    }
-
-                    // Add some starting points and build the mesh.
-                    pcs.addPoints(3000, featurePointInitFunc);
-                    pcs.buildMeshAsync().then((mesh) => {
-                        mesh.alwaysSelectAsActiveMesh = true;
-                    });
-
-                    // Define the logic for how to display a particular particle in the particle system
-                    // which represents a feature point.
-                    pcs.updateParticle = function (particle) {
-                        // Grab the feature point cloud from the xrFeaturePointsModule.
-                        var featurePointCloud = xrFeaturePointsModule.featurePointCloud;
-
-                        // Find the index of this particle in the particle system. If there exists a
-                        // mapping to a feature point then display its position, otherwise hide it somewhere far away.
-                        var index = particle.idx;
-                        if (index >= featurePointCloud.length) {
-                            // Hide the particle not currently in use.
-                            particle.position = new BABYLON.Vector3(-100, -100, -100);
-                        }
-                        else {
-                            // To display a feature point set its position to the position of the feature point
-                            // and set its color on the scale from white->red where white = least confident and
-                            // red = most confident.
-                            particle.position = featurePointCloud[index].position;
-                            particle.color = new BABYLON.Color4(1, 1 - featurePointCloud[index].confidenceValue, 1 - featurePointCloud[index].confidenceValue, 1);
-                        }
-
-                        return particle;
-                    }
-
-                    // Listen for changes in feature points both being added and updated, and only update
-                    // our display every 60 changes to the feature point cloud to avoid slowdowns.
-                    var featurePointChangeCounter = 0;
-                    xrFeaturePointsModule.onFeaturePointsAddedObservable.add((addedPointIds) => {
-                        if (++featurePointChangeCounter % 60 == 0) {
-                            pcs.setParticles();
-                        }
-                    });
-
-                    xrFeaturePointsModule.onFeaturePointsUpdatedObservable.add((updatedPointIds) => {
-                        if (++featurePointChangeCounter % 60 == 0) {
-                            pcs.setParticles();
-                        }
-                    });
-                }
-
-                let sessionMode = vr ? "immersive-vr" : "immersive-ar"
-                if (hololens) {
-                    // Because HoloLens 2 is a head mounted display, its Babylon.js immersive experience more closely aligns to vr
-                    sessionMode = "immersive-vr";
-
-                    // Below is an example for enabling hand tracking. The code is not unique to HoloLens 2, and may be reused for other WebXR hand tracking enabled devices.
-                    xr.baseExperience.featuresManager.enableFeature(
-                        BABYLON.WebXRFeatureName.HAND_TRACKING,
-                        "latest",
-                        { xrInput: xr.input });
-                }
-
-                // Test image tracking and detection.
-                // To test image tracking locally either bring up the images below on your machine by loading the URL or by printing them out.
-                // Then gain tracking on them during the AR Session by orienting your camera towards the image, tracking will be represented by a colored cube at the center of the image.
-                if (imageTracking) {
-                    const webXRTrackingMeshes = [];
-                    const webXRImageTrackingModule = xr.baseExperience.featuresManager.enableFeature(
-                        BABYLON.WebXRFeatureName.IMAGE_TRACKING,
-                        "latest",
-                        {
-                            images: [
-                                { src: "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/IridescentDishWithOlives/screenshot/screenshot_Large.jpg", estimatedRealWorldWidth: .2 },
-                                { src: "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/DragonAttenuation/screenshot/screenshot_large.png", estimatedRealWorldWidth: .2 },   
-                        ]});
-
-                    webXRImageTrackingModule.onTrackedImageUpdatedObservable.add((imageObject) => {
-                        if (webXRTrackingMeshes[imageObject.id] === undefined) {
-                            webXRTrackingMeshes[imageObject.id] = BABYLON.Mesh.CreateBox("box1", 0.05, scene);
-                            const mat = new BABYLON.StandardMaterial("mat", scene);
-                            mat.diffuseColor = BABYLON.Color3.Random();
-                            webXRTrackingMeshes[imageObject.id].material = mat;
-                        }
-                        webXRTrackingMeshes[imageObject.id].setEnabled(!imageObject.emulated);
-                        imageObject.transformationMatrix.decomposeToTransformNode(webXRTrackingMeshes[imageObject.id]);
-                    });
-                }
-
-                xr.baseExperience.enterXRAsync(sessionMode, "unbounded", xr.renderTarget).then((xrSessionManager) => {
-                    if (hololens) {
-                        // Pass through, head mounted displays (HoloLens 2) require autoClear and a black clear color
-                        xrSessionManager.scene.autoClear = true;
-                        xrSessionManager.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
-                    }
+                const randomRotation = new BABYLON.Animation("rotation", "rotation.x", frameRate, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE);
+                const keys = [];
+                keys.push({
+                    frame: 0,
+                    value: BABYLON.Tools.ToRadians(0),
                 });
-            });
-        }, 5000);
-    }
-
-    if (text) {
-        var Writer = BABYLON.MeshWriter(scene, { scale: 1.0, defaultFont: "Arial" });
-        new Writer(
-            "Lorem ipsum dolor sit amet...",
-            {
-                "anchor": "center",
-                "letter-height": 5,
-                "color": "#FF0000"
+                keys.push({
+                    frame: rotationSpeed,
+                    value: BABYLON.Tools.ToRadians(360),
+                });
+                randomRotation.setKeys(keys);
+                asteroid.animations.push(randomRotation);
+                scene.beginAnimation(asteroid, 0, rotationSpeed, true);
             }
-        );
-    }
 
-}, function (ex) {
-    console.log(ex.message, ex.stack);
+            for (each in scene.transformNodes) {
+                let randomScale = (Math.random() * 0.4) + 0.9;
+                randomScale *= randomScale;
+                //randomScale *= randomScale;
+                scene.transformNodes[each].scaling = new BABYLON.Vector3(randomScale, randomScale, randomScale);
+            }
+
+            scene.getTransformNodeByName("asteroidGroup104").scaling = new BABYLON.Vector3(1.3, 1.3, 1.3);
+            scene.getTransformNodeByName("asteroidGroup104").parent.scaling = new BABYLON.Vector3(1.22, 1.22, 1.22);
+            scene.getTransformNodeByName("asteroidGroup3").scaling = new BABYLON.Vector3(1, 1, 1);
+            scene.getTransformNodeByName("asteroidGroup3").parent.scaling = new BABYLON.Vector3(1, 1, 1);
+            scene.getTransformNodeByName("asteroidGroup105").scaling = new BABYLON.Vector3(1, 1, 1);
+            scene.getTransformNodeByName("asteroidGroup105").parent.scaling = new BABYLON.Vector3(1.25, 1.25, 1.25);
+            scene.getTransformNodeByName("asteroidGroup100").scaling = new BABYLON.Vector3(1, 1, 1);
+            scene.getTransformNodeByName("asteroidGroup100").parent.scaling = new BABYLON.Vector3(1.25, 1.25, 1.25);
+            scene.getTransformNodeByName("asteroidGroup102").scaling = new BABYLON.Vector3(1.52, 1.52, 1.52);
+            scene.getTransformNodeByName("asteroidGroup102").parent.scaling = new BABYLON.Vector3(1.29, 1.29, 1.29);
+            scene.getTransformNodeByName("asteroidGroup87").scaling = new BABYLON.Vector3(1.03, 1.03, 1.03);
+            scene.getTransformNodeByName("asteroidGroup87").parent.scaling = new BABYLON.Vector3(1.54, 1.54, 1.54);
+            scene.getTransformNodeByName("asteroidGroup84").scaling = new BABYLON.Vector3(1.28, 1.28, 1.28);
+            scene.getTransformNodeByName("asteroidGroup84").parent.scaling = new BABYLON.Vector3(1.47, 1.47, 1.47);
+            scene.getMeshByName("asteroidModule2_i30").parent.scaling = new BABYLON.Vector3(1.13, 1.13, 1.13);
+            scene.getMeshByName("asteroidModule1_i13").parent.scaling = new BABYLON.Vector3(1, 1, 1);
+
+            camera.checkCollisions = true;
+            camera.collisionRadius = new BABYLON.Vector3(1.5, 1.5, 1.5);
+            camera.minZ = 0.01;
+
+            let arMode = false;
+            let arAssets = ["__root__", "enemyShip", "heroShip", "laser1", "laser2", "laser3", "atmosphereSphere_mesh", "planet_mesh", "asteroidModule2_i30", "asteroidModule1_i91", "asteroidModule2_i106", "asteroidModule3_i115", "asteroidModule1_i108", "asteroidModule1_i109", "asteroidModule2_i124", "asteroidModule2_i125", "asteroidModule2_i126", "asteroidModule3_i141", "asteroidModule3_i142", "asteroidModule4_i119", "asteroidModule4_i120", "asteroidModule4_i121", "asteroidModule1_i106", "asteroidModule2_i122", "asteroidModule3_i137", "asteroidModule4_i117", "asteroidModule1_i93", "asteroidModule1_i94", "asteroidModule2_i109", "asteroidModule3_i118"];
+            // let arAssets = [];
+            //let advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+            let atmosphere = scene.getMeshByName("atmosphereSphere_mesh");
+            let oplanet = scene.getMeshByName("planet_mesh");
+            atmosphere.setEnabled(false);
+            oplanet.setEnabled(false);
+
+            // lasers
+            var mat = new BABYLON.StandardMaterial("laserMat", scene);
+            mat.disableLighting = true;
+            mat.emissiveColor = BABYLON.Color3.Red();
+            mat.alphaMode = BABYLON.Engine.ALPHA_ADD;
+            mat.alpha = 0.33;
+            scene.getMeshByName("laser1").material = mat;
+            scene.getMeshByName("laser1").scaling = new BABYLON.Vector3(3, 1, 3);
+            scene.getMeshByName("laser2").scaling = new BABYLON.Vector3(3, 1, 3);
+            scene.getMeshByName("laser3").scaling = new BABYLON.Vector3(3, 1, 3);
+            scene.getMeshByName("laser2").material = mat;
+            scene.getMeshByName("laser3").material = mat;
+
+
+
+            var sun = new BABYLON.VolumetricLightScatteringPostProcess('volumetric', 1.0, camera, undefined, 100, BABYLON.Texture.BILINEAR_SAMPLINGMODE, scene.getEngine(), false);
+            sun.mesh.material.diffuseTexture = new BABYLON.Texture("app:///Assets/sun.png", scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            sun.mesh.material.diffuseTexture.hasAlpha = true;
+            sun.mesh.scaling = new BABYLON.Vector3(50, 50, 50);
+
+            glowLayer.addExcludedMesh(sun.mesh);
+
+            
+            var planet = BABYLON.MeshBuilder.CreatePlane("planetPlane", { size: 100 }, scene);
+            planet.position.x = 200;
+            planet.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL | BABYLON.Mesh.BILLBOARDMODE_USE_POSITION;
+            
+            var planetMaterial = new BABYLON.StandardMaterial("", scene);
+            planetMaterial.backFaceCulling = false;
+            planetMaterial.disableLighting = true;
+            
+            planetMaterial.diffuseTexture = new BABYLON.Texture("app:///Assets/planetImage.png", scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            planetMaterial.emissiveColor = new BABYLON.Color3(1, 1, 1);
+            planetMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            planetMaterial.diffuseTexture.hasAlpha = true;
+            planetMaterial.useAlphaFromDiffuseTexture = true;
+            glowLayer.addExcludedMesh(planet);
+            /*
+            planet.alphaIndex = 5;
+            */
+            planet.material = planetMaterial;
+
+            engine.runRenderLoop(function () {
+                camera.alpha += 0.001;
+
+                sun.mesh.position.copyFrom(scene.activeCamera.position);
+                sun.mesh.position.x -= 0.47 * 300;
+                sun.mesh.position.y += 0.00 * 300;
+                sun.mesh.position.z += 0.86 * 300;
+
+
+                scene.render();
+            });
+        });
+    });
 });
