@@ -15,7 +15,7 @@ var xrFeaturePoints = false;
 var meshDetection = false;
 var text = false;
 var hololens = false;
-var cameraTexture = false;
+var cameraTexture = true;
 var imageTracking = false;
 const readPixels = false;
 
@@ -63,8 +63,12 @@ CreateBoxAsync(scene).then(function () {
 //BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/ClearCoatTest/glTF/ClearCoatTest.gltf").then(function () {
     BABYLON.Tools.Log("Loaded");
 
-    scene.createDefaultCamera(true, true, true);
-    scene.activeCamera.alpha += Math.PI;
+    //scene.createDefaultCamera(true, true, true);
+    //scene.activeCamera.alpha += Math.PI;
+
+    var camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0.2, 1, -1), scene);
+    camera.setTarget(new BABYLON.Vector3(0.2,0,0));
+
 
     if (ibl) {
         scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
@@ -74,14 +78,50 @@ CreateBoxAsync(scene).then(function () {
     }
 
     if (cameraTexture) {
-        var cameraBox = BABYLON.Mesh.CreateBox("box1", 0.25);
+        /*var cameraBox = BABYLON.Mesh.CreateBox("box1", 0.25);
         var mat = new BABYLON.StandardMaterial("mat", scene);
         mat.diffuseColor = BABYLON.Color3.Black();
 
         BABYLON.VideoTexture.CreateFromWebCam(scene, function (videoTexture) {
             mat.emissiveTexture = videoTexture;
             cameraBox.material = mat;
+        }, { maxWidth: 256, maxHeight: 256, facingMode: "environment" });*/
+
+        var cameraBox = BABYLON.Mesh.CreateBox("box1", 0.25);
+        var mat = new BABYLON.StandardMaterial("mat", scene);
+        mat.diffuseColor = BABYLON.Color3.Black();
+
+        var cameraBox2 = BABYLON.Mesh.CreateBox("box2", 0.25);
+        var mat2 = new BABYLON.StandardMaterial("mat2", scene);
+        mat2.diffuseColor = BABYLON.Color3.Black();
+        cameraBox2.position.x = 0.4;
+
+        var ttex = null;
+        BABYLON.VideoTexture.CreateFromWebCam(scene, function (videoTexture) {
+            
+            mat.emissiveTexture = videoTexture;
+            cameraBox.material = mat;
+            cameraBox2.material = mat2;
+
+            scene.onBeforeRenderObservable.add(()=>{
+                videoTexture.readPixels(0, 0).then((arr)=>{
+                    //console.log(arr);
+                    if(!ttex) {
+                        const textureWidth = videoTexture.getSize().width;
+                        const textureHeight = videoTexture.getSize().height;
+                        ttex = new BABYLON.RawTexture.CreateRGBATexture(arr, textureWidth, textureHeight, scene, false, false);    
+                        mat2.emissiveTexture = ttex;
+                    } else {
+                        ttex.update(arr);
+                    }
+                });
+                
+
+            });
+
         }, { maxWidth: 256, maxHeight: 256, facingMode: "environment" });
+
+
     }
 
     if (readPixels) {
