@@ -17,5 +17,10 @@ int main() {
     config.Window = hwnd;
     config.Width = 600;
     config.Height = 400;
-    return Run({config});
+    for (int t = 0; t < 100; t++)
+    {
+        Run({config});
+    }
+
+    return 0;
 }

@@ -355,7 +355,7 @@ describe("clearTimeout", function () {
 
 mocha.run(failures => {
     // Test program will wait for code to be set before exiting
-    setTimeout(() => {
+    //setTimeout(() => {
         if (failures > 0) {
             // Failure
             SetExitCode(1);
@@ -363,5 +363,5 @@ mocha.run(failures => {
             // Success
             SetExitCode(0);
         }
-    }, 0);
+    //}, 0);
 });

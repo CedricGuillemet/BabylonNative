@@ -27,6 +27,7 @@ void SetExitCode(const Napi::CallbackInfo& info)
 
 int Run(Babylon::Graphics::Device device)
 {
+    exitCode = {};
     std::optional<Babylon::Polyfills::Canvas> nativeCanvas;
 
     Babylon::AppRuntime runtime{};
