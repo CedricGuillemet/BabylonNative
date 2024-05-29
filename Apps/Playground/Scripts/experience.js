@@ -172,7 +172,9 @@ CreateBoxAsync(scene).then(function () {
 //BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF/CesiumMan.gltf").then(function () {
 //BABYLON.SceneLoader.AppendAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/ClearCoatTest/glTF/ClearCoatTest.gltf").then(function () {
     BABYLON.Tools.Log("Loaded");
-
+    var gl = new BABYLON.GlowLayer("glow", scene);
+    gl.isEnabled = true;  // TODO: make as var
+    gl.intensity = 0.5; // TODO: make as var
     // This creates and positions a free camera (non-mesh)
     //scene.createDefaultCamera(true, true, true);
     var camera = new BABYLON.ArcRotateCamera("camera1", 1, 2, 2, new BABYLON.Vector3(0, 0, 0), scene);
