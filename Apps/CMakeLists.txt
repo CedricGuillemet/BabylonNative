@@ -4,6 +4,7 @@ endif()
 
 if((WIN32 AND NOT WINDOWS_STORE) OR (APPLE AND NOT IOS AND NOT VISIONOS) OR (UNIX AND NOT ANDROID AND NOT APPLE))
     add_subdirectory(UnitTests)
+    add_subdirectory(Pybylon)
 endif()
 
 npm(install --silent)

@@ -47,6 +47,10 @@ FetchContent_Declare(OpenXR-SDK
 FetchContent_Declare(SPIRV-Cross
     GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
     GIT_TAG 578a291759db6fe7c3f4735d3512c0526ad18efc)
+FetchContent_Declare(pybind11
+    GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    GIT_TAG fdab860a32fb33a4a0c0554ce6af524661f14a88)	
+	
 # --------------------------------------------------
 
 FetchContent_MakeAvailable(CMakeExtensions)
