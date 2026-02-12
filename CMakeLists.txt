@@ -134,6 +134,9 @@ option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
 
+# Windows App SDK
+option(BABYLON_NATIVE_USE_WINDOWS_APP_SDK "Use Windows App SDK dependency provided with Babylon Native." ON)
+
 if(ENABLE_SANITIZERS)
     set(ENABLE_RTTI ON CACHE BOOL "" FORCE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

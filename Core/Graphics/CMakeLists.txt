@@ -29,8 +29,10 @@ target_include_directories(Graphics
     PRIVATE "InternalInclude")
 
 if(WINDOWS_STORE)
-    target_link_libraries(Graphics
-        PRIVATE WindowsAppSDK)
+    if (BABYLON_NATIVE_USE_WINDOWS_APP_SDK)
+        target_link_libraries(Graphics
+            PRIVATE WindowsAppSDK)
+    endif()
 elseif(WIN32)
     target_link_libraries(Graphics
         PRIVATE "shlwapi.lib")
