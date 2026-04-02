@@ -53,8 +53,8 @@ FetchContent_Declare(ios-cmake
     GIT_TAG 4.5.0
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
-    GIT_REPOSITORY https://github.com/BabylonJS/JsRuntimeHost.git
-    GIT_TAG ae0253a458767ee28137312ac41c9c5c966f9ba4)
+    GIT_REPOSITORY https://github.com/CedricGuillemet/JsRuntimeHost.git
+    GIT_TAG a66991c862362956aa142567a7faf7e9b76c0c70)
 FetchContent_Declare(SPIRV-Cross
     GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
     GIT_TAG 6277baf62877f6b1a66a5801da94f0c9276991dc
@@ -110,6 +110,7 @@ option(BABYLON_DEBUG_TRACE "Enable debug trace." OFF)
 # WARNING: This is experimental. Only use it if you can ensure that your application will properly handle thread affinity.
 option(BABYLON_NATIVE_CHECK_THREAD_AFFINITY "Checks thread safety in the graphics device calls. It can be removed if hosting application ensures thread coherence." ON)
 
+
 # Plugins
 option(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE "Include Babylon Native Plugin ExternalTexture." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVECAMERA "Include Babylon Native Plugin NativeCamera." ON)
@@ -129,6 +130,9 @@ option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." 
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
+
+option(QJS_DISABLE_PARSER "Disable JS source code parser" ON)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF)
 
 if(ENABLE_SANITIZERS)
     set(ENABLE_RTTI ON CACHE BOOL "" FORCE)

@@ -14,22 +14,26 @@
 #include <Babylon/AppRuntime.h>
 #include <Babylon/Graphics/Device.h>
 #include <Babylon/ScriptLoader.h>
-#include <Babylon/Plugins/NativeCapture.h>
-#include <Babylon/Plugins/NativeEncoding.h>
+//#include <Babylon/Plugins/NativeCapture.h>
+//#include <Babylon/Plugins/NativeEncoding.h>
 #include <Babylon/Plugins/NativeEngine.h>
-#include <Babylon/Plugins/NativeOptimizations.h>
-#include <Babylon/Plugins/NativeCamera.h>
-#include <Babylon/Plugins/NativeInput.h>
-#include <Babylon/Plugins/TestUtils.h>
-#include <Babylon/Polyfills/Blob.h>
+//#include <Babylon/Plugins/NativeOptimizations.h>
+//#include <Babylon/Plugins/NativeCamera.h>
+//#include <Babylon/Plugins/NativeInput.h>
+//#include <Babylon/Plugins/TestUtils.h>
+//#include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
 #include <Babylon/Polyfills/Window.h>
-#include <Babylon/Polyfills/XMLHttpRequest.h>
-#include <Babylon/Polyfills/Canvas.h>
+//#include <Babylon/Polyfills/XMLHttpRequest.h>
+//#include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/ShaderCache.h>
 #include <Babylon/DebugTrace.h>
+#include <iostream>
+#include <fstream>
 
 #define MAX_LOADSTRING 100
+
+const char* cache_path = "E:\\dev\\babylon\\BNQuickJS\\build\\Apps\\Playground\\Debug\\Scripts\\ShaderCacheDump.bin";
 
 // Global Variables:
 HINSTANCE hInst;                     // current instance
@@ -38,8 +42,8 @@ WCHAR szWindowClass[MAX_LOADSTRING]; // the main window class name
 std::optional<Babylon::AppRuntime> runtime{};
 std::optional<Babylon::Graphics::Device> device{};
 std::optional<Babylon::Graphics::DeviceUpdate> update{};
-Babylon::Plugins::NativeInput* nativeInput{};
-std::optional<Babylon::Polyfills::Canvas> nativeCanvas{};
+//Babylon::Plugins::NativeInput* nativeInput{};
+//std::optional<Babylon::Polyfills::Canvas> nativeCanvas{};
 bool minimized{false};
 int buttonRefCount{0};
 
@@ -65,7 +69,7 @@ namespace
                 return "";
         }
     }
-
+    
     std::string GetUrlFromPath(const std::filesystem::path& path)
     {
         char url[1024];
@@ -108,8 +112,8 @@ namespace
             device->FinishRenderingCurrentFrame();
         }
 
-        nativeCanvas.reset();
-        nativeInput = {};
+        //nativeCanvas.reset();
+        //nativeInput = {};
         runtime.reset();
         update.reset();
         device.reset();
@@ -152,15 +156,52 @@ namespace
 
         options.EnableDebugger = true;
 
-        options.UnhandledExceptionHandler = [hWnd](const Napi::Error& error) {
+options.UnhandledExceptionHandler = [hWnd](const Napi::Error& error) {
             std::ostringstream ss{};
-            ss << "[Uncaught Error] " << Napi::GetErrorString(error) << std::endl;
-            OutputDebugStringA(ss.str().data());
+            ss << "[Uncaught Error] " << error.Message() << std::endl;
+            ss << error.what() << std::endl;
 
+            // Try to get the stack trace
+            auto value = error.Value();
+            if (value.IsObject())
+            {
+                auto errorObj = value.As<Napi::Object>();
+
+                // Get stack trace if available
+                if (errorObj.Has("stack"))
+                {
+                    auto stack = errorObj.Get("stack");
+                    if (stack.IsString())
+                    {
+                        ss << "Stack: " << stack.As<Napi::String>().Utf8Value() << std::endl;
+                    }
+                }
+
+                // Get line number if available
+                if (errorObj.Has("lineNumber"))
+                {
+                    auto lineNumber = errorObj.Get("lineNumber");
+                    if (lineNumber.IsNumber())
+                    {
+                        ss << "Line: " << lineNumber.As<Napi::Number>().Int32Value() << std::endl;
+                    }
+                }
+
+                // Get file name if available
+                if (errorObj.Has("fileName"))
+                {
+                    auto fileName = errorObj.Get("fileName");
+                    if (fileName.IsString())
+                    {
+                        ss << "File: " << fileName.As<Napi::String>().Utf8Value() << std::endl;
+                    }
+                }
+            }
+
+            OutputDebugStringA(ss.str().data());
             std::cerr << ss.str();
             std::cerr.flush();
 
-            Babylon::Plugins::TestUtils::errorCode = -1;
             PostMessage(hWnd, WM_CLOSE, 0, 0);
         };
 
@@ -169,8 +210,8 @@ namespace
         runtime->Dispatch([hWnd](Napi::Env env) {
             device->AddToJavaScript(env);
 
-            Babylon::Polyfills::Blob::Initialize(env);
-
+            //Babylon::Polyfills::Blob::Initialize(env);
+            
             Babylon::Polyfills::Console::Initialize(env, [](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
                 std::ostringstream ss{};
                 ss << "[" << GetLogLevelString(logLevel) << "] " << message << std::endl;
@@ -179,29 +220,30 @@ namespace
                 std::cout << ss.str();
                 std::cout.flush();
             });
-
+            
             Babylon::Polyfills::Window::Initialize(env);
 
-            Babylon::Polyfills::XMLHttpRequest::Initialize(env);
+            //Babylon::Polyfills::XMLHttpRequest::Initialize(env);
 
-            nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
+            //nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
 
-            Babylon::Plugins::NativeEncoding::Initialize(env);
+            //Babylon::Plugins::NativeEncoding::Initialize(env);
 
             Babylon::Plugins::NativeEngine::Initialize(env);
 
-            Babylon::Plugins::NativeOptimizations::Initialize(env);
+            //Babylon::Plugins::NativeOptimizations::Initialize(env);
 
-            Babylon::Plugins::NativeCapture::Initialize(env);
+            //Babylon::Plugins::NativeCapture::Initialize(env);
 
-            Babylon::Plugins::NativeCamera::Initialize(env);
+            //Babylon::Plugins::NativeCamera::Initialize(env);
 
-            nativeInput = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
+            //nativeInput = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
 
-            Babylon::Plugins::TestUtils::Initialize(env, hWnd);
+            //Babylon::Plugins::TestUtils::Initialize(env, hWnd);
         });
 
         Babylon::ScriptLoader loader{*runtime};
+#if 0
         loader.LoadScript("app:///Scripts/ammo.js");
         // Commenting out recast.js for now because v8jsi is incompatible with asm.js.
         // loader.LoadScript("app:///Scripts/recast.js");
@@ -226,6 +268,12 @@ namespace
 
             loader.LoadScript("app:///Scripts/playground_runner.js");
         }
+#else
+        //loader.LoadScript("app:///Scripts/toto-babel.js");
+        std::ifstream shaderCacheDumpFile{cache_path, std::ios::binary};
+        Babylon::ShaderCache::Deserialize(shaderCacheDumpFile);
+        loader.LoadScript("app:///Scripts/toto4.js");
+#endif
     }
 
     void UpdateWindowSize(size_t width, size_t height)
@@ -274,6 +322,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                 device->FinishRenderingCurrentFrame();
                 device->StartRenderingCurrentFrame();
                 update->Start();
+                /*/
+                static int frame = 0;
+                static bool dumped = false;
+                frame++;
+                if (frame > 1000 && !dumped)
+                {
+                    std::ofstream shaderCacheDumpFile{cache_path, std::ios::binary};
+                    if (Babylon::ShaderCache::Serialize(shaderCacheDumpFile))
+                    {
+                    
+                        dumped = true;
+                    }
+                }*/
             }
 
             result = PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE) && msg.message != WM_QUIT;
@@ -348,7 +409,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     return TRUE;
 }
-
+/*
 void ProcessMouseButtons(tagPOINTER_BUTTON_CHANGE_TYPE changeType, int x, int y)
 {
     switch (changeType)
@@ -373,6 +434,7 @@ void ProcessMouseButtons(tagPOINTER_BUTTON_CHANGE_TYPE changeType, int x, int y)
             break;
     }
 }
+*/
 
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
@@ -450,7 +512,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case WM_DESTROY:
         {
             Uninitialize();
-            PostQuitMessage(Babylon::Plugins::TestUtils::errorCode);
+            //PostQuitMessage(Babylon::Plugins::TestUtils::errorCode);
             break;
         }
         case WM_KEYDOWN:
@@ -461,6 +523,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
+            /*
         case WM_POINTERWHEEL:
         {
             if (nativeInput != nullptr)
@@ -545,6 +608,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
+        */
         default:
         {
             return DefWindowProc(hWnd, message, wParam, lParam);

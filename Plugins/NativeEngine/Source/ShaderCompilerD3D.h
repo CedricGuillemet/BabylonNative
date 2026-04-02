@@ -1,3 +1,4 @@
+#if 0
 #pragma once
 
 #include "ShaderCompiler.h"
@@ -150,3 +151,4 @@ namespace Babylon
         return ShaderCompilerCommon::CreateBgfxShader(std::move(vertexShaderInfo), std::move(fragmentShaderInfo));
     }
 }
+#endif

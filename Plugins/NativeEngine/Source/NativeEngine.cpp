@@ -13,12 +13,13 @@
 #include <napi/pointer.h>
 
 #include <bgfx/bgfx.h>
-
+/*
 #include <bimg/bimg.h>
 #include <bimg/decode.h>
 #include <bimg/encode.h>
 
 #include <stb/stb_image_resize.h>
+*/
 #include <bx/math.h>
 
 #include <cmath>
@@ -27,6 +28,7 @@
 
 #ifdef WEBP
 #include <webp/decode.h>
+rr
 #endif
 
 namespace Babylon
@@ -74,17 +76,18 @@ namespace Babylon
             constexpr uint64_t INTERPOLATE = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_FACTOR, BGFX_STATE_BLEND_INV_FACTOR, BGFX_STATE_BLEND_FACTOR, BGFX_STATE_BLEND_INV_FACTOR);
             constexpr uint64_t SCREENMODE = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_COLOR, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
         }
-
+#if 0
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::Count) == bgfx::TextureFormat::Count);
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::RGBA8) == bgfx::TextureFormat::RGBA8);
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::RGB8) == bgfx::TextureFormat::RGB8);
-
+        
         bgfx::TextureFormat::Enum Cast(bimg::TextureFormat::Enum format)
         {
             return static_cast<bgfx::TextureFormat::Enum>(format);
         }
-
+#endif
         using TransformFn = void (*)(const uint8_t*, uint8_t*);
+        #if 0
         void TransformImage(const bimg::ImageContainer* src, bimg::ImageContainer* dst, TransformFn transformFn)
         {
             const uint8_t* srcData{static_cast<const uint8_t*>(src->m_data)};
@@ -118,7 +121,7 @@ namespace Babylon
                 std::memcpy(backPtr, buffer.data(), rowPitch);
             }
         }
-
+        
         std::function<std::pair<uint32_t, uint32_t>(uint32_t x, uint32_t y)> GetPixelMapper(bimg::Orientation::Enum orientation, uint32_t width, uint32_t height)
         {
             // clang-format off
@@ -303,9 +306,11 @@ namespace Babylon
             assert(image != nullptr);
             return image;
         }
-
+        #endif
+#if 0
         void LoadTextureFromImage(Graphics::Texture* texture, bimg::ImageContainer* image, bool srgb)
         {
+
             if (texture->IsValid())
             {
                 if (texture->Width() != image->m_width || texture->Height() != image->m_height)
@@ -340,6 +345,7 @@ namespace Babylon
 
         void LoadCubeTextureFromImages(Graphics::Texture* texture, std::vector<bimg::ImageContainer*>& images, bool srgb)
         {
+
             const bimg::ImageContainer* firstImage{images.front()};
             assert(firstImage->m_width == firstImage->m_height);
             uint32_t size{firstImage->m_width};
@@ -413,7 +419,7 @@ namespace Babylon
                 }
             }
         }
-
+#endif
         auto RenderTargetSamplesToBgfxMsaaFlag(uint32_t renderTargetSamples)
         {
             switch (renderTargetSamples)
@@ -714,8 +720,8 @@ namespace Babylon
                 InstanceMethod("deleteTexture", &NativeEngine::DeleteTexture),
                 InstanceMethod("readTexture", &NativeEngine::ReadTexture),
 
-                InstanceMethod("createImageBitmap", &NativeEngine::CreateImageBitmap),
-                InstanceMethod("resizeImageBitmap", &NativeEngine::ResizeImageBitmap),
+                //InstanceMethod("createImageBitmap", &NativeEngine::CreateImageBitmap),
+                //InstanceMethod("resizeImageBitmap", &NativeEngine::ResizeImageBitmap),
 
                 InstanceMethod("createFrameBuffer", &NativeEngine::CreateFrameBuffer),
 
@@ -1010,12 +1016,13 @@ namespace Babylon
 
         if (!shaderInfo)
         {
-            bgfxShaderInfo = m_shaderCompiler.Compile(ProcessSamplerFlip(ProcessShaderCoordinates(vertexSource)), ProcessSamplerFlip(fragmentSource));
+            return {};
+            /* bgfxShaderInfo = m_shaderCompiler.Compile(ProcessSamplerFlip(ProcessShaderCoordinates(vertexSource)), ProcessSamplerFlip(fragmentSource));
             if (ShaderCacheImpl::GetImpl())
             {
                 ShaderCacheImpl::GetImpl()->AddShader(vertexSource, fragmentSource, bgfxShaderInfo);
             } 
-            shaderInfo = &bgfxShaderInfo;
+            shaderInfo = &bgfxShaderInfo;*/
         }
 
         static auto InitUniformInfos{
@@ -1424,8 +1431,9 @@ namespace Babylon
         texture->Create2D(width, height, hasMips, 1, format, flags);
     }
 
-    void NativeEngine::LoadTexture(const Napi::CallbackInfo& info)
+    void NativeEngine::LoadTexture(const Napi::CallbackInfo& /*info*/)
     {
+        #if 0
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data = info[1].As<Napi::TypedArray>();
         const auto generateMips = info[2].As<Napi::Boolean>().Value();
@@ -1453,6 +1461,7 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+        #endif
     }
 
     void NativeEngine::CopyTexture(NativeDataStream::Reader& data)
@@ -1465,8 +1474,9 @@ namespace Babylon
         GetBoundFrameBuffer(*encoder).Blit(*encoder, textureDestination->Handle(), 0, 0, textureSource->Handle());
     }
 
-    void NativeEngine::LoadRawTexture(const Napi::CallbackInfo& info)
+    void NativeEngine::LoadRawTexture(const Napi::CallbackInfo& /*info*/)
     {
+#if 0
         const auto texture{info[0].As<Napi::Pointer<Graphics::Texture>>().Get()};
         const auto data{info[1].As<Napi::TypedArray>()};
         const auto width{static_cast<uint16_t>(info[2].As<Napi::Number>().Uint32Value())};
@@ -1484,10 +1494,12 @@ namespace Babylon
         bimg::ImageContainer* image{bimg::imageAlloc(&Graphics::DeviceContext::GetDefaultAllocator(), format, width, height, 1, 1, false, false, bytes)};
         image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, false, generateMips);
         LoadTextureFromImage(texture, image, false);
+#endif
     }
 
-    void NativeEngine::LoadRawTexture2DArray(const Napi::CallbackInfo& info)
+    void NativeEngine::LoadRawTexture2DArray(const Napi::CallbackInfo& /* info*/)
     {
+        #if 0
         const auto texture{info[0].As<Napi::Pointer<Graphics::Texture>>().Get()};
         const auto data = info[1].As<Napi::TypedArray>();
         const auto width{static_cast<uint16_t>(info[2].As<Napi::Number>().Uint32Value())};
@@ -1529,10 +1541,12 @@ namespace Babylon
                 texture->Update2D(i, 0, 0, 0, width, height, dataCopy);
             }
         }
+        #endif
     }
 
-    void NativeEngine::LoadCubeTexture(const Napi::CallbackInfo& info)
+    void NativeEngine::LoadCubeTexture(const Napi::CallbackInfo& /*info*/)
     {
+        #if 0
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data{info[1].As<Napi::Array>()};
         const auto generateMips{info[2].As<Napi::Boolean>().Value()};
@@ -1569,10 +1583,12 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+        #endif
     }
 
-    void NativeEngine::LoadCubeTextureWithMips(const Napi::CallbackInfo& info)
+    void NativeEngine::LoadCubeTextureWithMips(const Napi::CallbackInfo& /*info*/)
     {
+        #if 0
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data{info[1].As<Napi::Array>()};
         const auto invertY{info[2].As<Napi::Boolean>().Value()};
@@ -1613,6 +1629,7 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+        #endif
     }
 
     Napi::Value NativeEngine::GetTextureWidth(const Napi::CallbackInfo& info)
@@ -1717,6 +1734,10 @@ namespace Babylon
     Napi::Value NativeEngine::ReadTexture(const Napi::CallbackInfo& info)
     {
         const Napi::Env env{info.Env()};
+        const auto deferred{Napi::Promise::Deferred::New(env)};
+
+        #if 0
+        
 
         Graphics::Texture* texture{info[0].As<Napi::Pointer<Graphics::Texture>>().Get()};
         uint8_t mipLevel{static_cast<uint8_t>(info[1].As<Napi::Number>().Uint32Value())};
@@ -1728,7 +1749,7 @@ namespace Babylon
         uint32_t bufferOffset{info[7].As<Napi::Number>().Uint32Value()};
         uint32_t bufferLength{info[8].As<Napi::Number>().Uint32Value()};
 
-        const auto deferred{Napi::Promise::Deferred::New(env)};
+        
 
         // Calculate source texture storage size.
         const auto sourceTextureFormat{texture->Format()};
@@ -1839,7 +1860,7 @@ namespace Babylon
                     }
                 });
         }
-
+        #endif
         return deferred.Promise();
     }
 
@@ -2069,9 +2090,10 @@ namespace Babylon
         const auto level = info[0].As<Napi::Number>().FloatValue();
         m_deviceContext.SetHardwareScalingLevel(level);
     }
-
+#if 0
     Napi::Value NativeEngine::CreateImageBitmap(const Napi::CallbackInfo& info)
     {
+        
         const Napi::Env env{info.Env()};
         bimg::ImageContainer* image{nullptr};
         bool allocatedImage{false};
@@ -2125,12 +2147,13 @@ namespace Babylon
         {
             bimg::imageFree(image);
         }
-
+        
         return imageBitmap;
     }
 
     Napi::Value NativeEngine::ResizeImageBitmap(const Napi::CallbackInfo& info)
     {
+        
         const auto imageBitmap = info[0].As<Napi::Object>();
         const auto bufferWidth = info[1].As<Napi::Number>().Uint32Value();
         const auto bufferHeight = info[2].As<Napi::Number>().Uint32Value();
@@ -2176,7 +2199,7 @@ namespace Babylon
         bimg::imageFree(image);
         return Napi::Value::From(env, outputData);
     }
-
+    #endif
     void NativeEngine::SetRenderResetCallback(const Napi::CallbackInfo& info)
     {
         const auto callback{info[0].As<Napi::Function>()};

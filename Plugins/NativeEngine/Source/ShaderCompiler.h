@@ -2,8 +2,11 @@
 
 #include <string_view>
 #include <functional>
-#include <spirv_cross.hpp>
-#include <spirv_parser.hpp>
+//#include <spirv_cross.hpp>
+//#include <spirv_parser.hpp>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace bgfx
 {

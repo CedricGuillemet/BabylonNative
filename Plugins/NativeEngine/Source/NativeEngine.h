@@ -15,10 +15,11 @@
 #include <napi/napi.h>
 
 #include <bgfx/bgfx.h>
+/*
 #include <bgfx/platform.h>
 #include <bimg/bimg.h>
 #include <bx/allocator.h>
-
+*/
 #include <gsl/gsl>
 
 #include <arcana/threading/cancellation.h>
@@ -230,7 +231,7 @@ namespace Babylon
 
         std::shared_ptr<arcana::cancellation_source> m_cancellationSource{};
 
-        ShaderCompiler m_shaderCompiler{};
+        //ShaderCompiler m_shaderCompiler{};
 
         ProgramData* m_currentProgram{nullptr};
 

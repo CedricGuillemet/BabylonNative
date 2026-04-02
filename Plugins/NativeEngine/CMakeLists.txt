@@ -39,18 +39,19 @@ target_link_libraries(NativeEngine
     PUBLIC napi
     PRIVATE arcana
     PRIVATE bgfx
-    PRIVATE bimg
-    PRIVATE bimg_encode
-    PRIVATE bimg_decode
+    #PRIVATE bimg
+    #PRIVATE bimg_encode
+    #PRIVATE bimg_decode
     PRIVATE bx
-    PRIVATE minz
-    PRIVATE glslang
-    PRIVATE glslang-default-resource-limits
+    #PRIVATE minz
+    #PRIVATE glslang
+    #PRIVATE glslang-default-resource-limits
     PRIVATE GraphicsDevice
     PRIVATE GraphicsDeviceContext
     PRIVATE JsRuntime
-    PRIVATE SPIRV)
-
+    #PRIVATE SPIRV
+)
+if(0)
 if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP)
     target_compile_definitions(NativeEngine
         PRIVATE WEBP)
@@ -72,6 +73,7 @@ endif()
 if(WIN32)
     target_link_libraries(NativeEngine
         PRIVATE "d3dcompiler.lib")
+endif()
 endif()
 
 target_compile_definitions(NativeEngine
