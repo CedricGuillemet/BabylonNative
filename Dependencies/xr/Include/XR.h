@@ -7,8 +7,23 @@
 #include <unordered_map>
 #include <arcana/threading/task.h>
 
+// Platform-specific XR window type
+#if defined(__APPLE__)
+namespace CA { class MetalLayer; }
+#elif defined(ANDROID)
+struct ANativeWindow;
+#endif
+
 namespace xr
 {
+#if defined(__APPLE__)
+    using WindowT = CA::MetalLayer*;
+#elif defined(ANDROID)
+    using WindowT = ANativeWindow*;
+#else
+    using WindowT = void*;
+#endif
+
     enum class TextureFormat
     {
         RGBA8_SRGB,
@@ -368,12 +383,12 @@ namespace xr
                 std::unique_ptr<Impl> m_impl{};
             };
 
-            static arcana::task<std::shared_ptr<Session>, std::exception_ptr> CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider);
+            static arcana::task<std::shared_ptr<Session>, std::exception_ptr> CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<WindowT()> windowProvider);
             ~Session();
 
             // Do not use, call CreateAsync instead. Kept public to keep compatibility with make_shared.
             // Move to private when changing to unique_ptr.
-            Session(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider);
+            Session(System& system, void* graphicsDevice, void* commandQueue, std::function<WindowT()> windowProvider);
 
             std::unique_ptr<Frame> GetNextFrame(bool& shouldEndSession, bool& shouldRestartSession, std::function<arcana::task<void, std::exception_ptr>(void*)> deletedTextureAsyncCallback = [](void*){ return arcana::task_from_result<std::exception_ptr>(); });
             void RequestEndSession();

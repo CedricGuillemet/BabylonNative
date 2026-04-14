@@ -239,10 +239,10 @@ namespace xr
         bool PlaneDetectionEnabled{ false };
         bool FeaturePointCloudEnabled{ false };
 
-        Impl(System::Impl& systemImpl, void* graphicsContext, std::function<void*()> windowProvider)
+        Impl(System::Impl& systemImpl, void* graphicsContext, std::function<WindowT()> windowProvider)
             : SystemImpl{ systemImpl }
             , xrContext{systemImpl.XrContext}
-            , windowProvider{ [windowProvider{ std::move(windowProvider) }] { return reinterpret_cast<ANativeWindow*>(windowProvider()); } }
+            , windowProvider{ std::move(windowProvider) }
             , context{reinterpret_cast<EGLContext>(graphicsContext) }
             , pauseTicket{AddPauseCallback([this]() { this->PauseSession(); }) }
             , resumeTicket{AddResumeCallback([this]() { this->ResumeSession(); }) }
@@ -1256,7 +1256,7 @@ namespace xr
         std::vector<std::unique_ptr<Frame::ImageTrackingResult>> imageTrackingResults{};
         std::unordered_map<ArAugmentedImage*, Frame::ImageTrackingResult::Identifier> imageTrackingResultsMap{};
 
-        std::function<ANativeWindow*()> windowProvider{};
+        std::function<WindowT()> windowProvider{};
         ANativeWindow* window{};
         EGLDisplay display{};
         EGLConfig config{};
@@ -1553,7 +1553,7 @@ namespace xr
         return "ARCore";
     }
 
-    arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider)
+    arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<WindowT()> windowProvider)
     {
         // First perform the ARCore installation check, request install if not yet installed.
         return CheckAndInstallARCoreAsync().then(arcana::inline_scheduler, arcana::cancellation::none(), []()
@@ -1567,7 +1567,7 @@ namespace xr
         });
     }
 
-    System::Session::Session(System& system, void* graphicsDevice, void*, std::function<void*()> windowProvider)
+    System::Session::Session(System& system, void* graphicsDevice, void*, std::function<WindowT()> windowProvider)
         : m_impl{ std::make_unique<System::Session::Impl>(*system.m_impl, graphicsDevice, std::move(windowProvider)) }
     {}
 

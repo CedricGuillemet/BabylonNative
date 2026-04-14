@@ -12,7 +12,7 @@
 
 #import "Include/IXrContextARKit.h"
 
-@interface SessionDelegate : NSObject <ARSessionDelegate, MTKViewDelegate>
+@interface SessionDelegate : NSObject <ARSessionDelegate>
 @end
 
 namespace {
@@ -533,14 +533,6 @@ namespace {
   }
 }
 
-- (void)mtkView:(MTKView *)__unused view drawableSizeWillChange:(CGSize)size {
-    _viewportSize.width = size.width;
-    _viewportSize.height = size.height;
-}
-
-- (void)drawInMTKView:(MTKView *)__unused view {
-}
-
 - (CGSize)viewSize {
     return _viewportSize;
 }
@@ -689,9 +681,9 @@ namespace xr {
         float DepthFarZ{ DEFAULT_DEPTH_FAR_Z };
         bool FeaturePointCloudEnabled{ false };
 
-        Impl(System::Impl& systemImpl, void* graphicsContext, void* commandQueue, std::function<void*()> windowProvider)
+        Impl(System::Impl& systemImpl, void* graphicsContext, void* commandQueue, std::function<WindowT()> windowProvider)
             : SystemImpl{ systemImpl }
-            , getXRView{ [windowProvider{ std::move(windowProvider) }] { return (__bridge MTKView*)windowProvider(); } }
+            , getMetalLayer{ std::move(windowProvider) }
             , metalDevice{ (__bridge id<MTLDevice>)graphicsContext }
             , commandQueue{ (__bridge id<MTLCommandQueue>)commandQueue } {
 
@@ -778,35 +770,22 @@ namespace xr {
         }
 
         void UpdateXRView() {
-            UpdateXRView(getXRView());
+            UpdateXRView((__bridge CAMetalLayer*)getMetalLayer());
         }
 
-        void UpdateXRView(MTKView* activeXRView) {
-            // Check whether the xr view has changed, and if so, reconfigure it.
-            if (activeXRView != xrView) {
-                if (xrView) {
-                    xrView.delegate = nil;
-                    [xrView releaseDrawables];
-                    metalLayer = nil;
-                }
+        void UpdateXRView(CAMetalLayer* activeMetalLayer) {
+            // Check whether the metal layer has changed, and if so, reconfigure it.
+            if (activeMetalLayer != metalLayer) {
+                metalLayer = activeMetalLayer;
 
-                xrView = activeXRView;
-
-                if (xrView) {
-                    xrView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-// NOTE: There is an incorrect warning about CAMetalLayer specifically when compiling for the simulator.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpartial-availability"
-                    metalLayer = (CAMetalLayer *)xrView.layer;
-#pragma clang diagnostic pop
+                if (metalLayer) {
+                    metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
                     metalLayer.device = metalDevice;
 
-                    auto scale = xrView.contentScaleFactor;
-                    viewportSize.x = xrView.bounds.size.width * scale;
-                    viewportSize.y = xrView.bounds.size.height * scale;
+                    auto size = metalLayer.drawableSize;
+                    viewportSize.x = size.width;
+                    viewportSize.y = size.height;
                     [sessionDelegate setViewSize:CGSizeMake(viewportSize.x, viewportSize.y)];
-
-                    xrView.delegate = sessionDelegate;
                 }
             }
         }
@@ -1506,8 +1485,7 @@ namespace xr {
         }
 
     private:
-        std::function<MTKView*()> getXRView{};
-        MTKView* xrView{};
+        std::function<WindowT()> getMetalLayer{};
         bool sessionEnded{ false };
         id<MTLDevice> metalDevice{};
 // NOTE: There is an incorrect warning about CAMetalLayer specifically when compiling for the simulator.
@@ -1807,14 +1785,14 @@ namespace xr {
         return "ARKit";
     }
 
-    arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider) {
+    arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<WindowT()> windowProvider) {
         auto session = std::make_shared<System::Session>(system, graphicsDevice, commandQueue, std::move(windowProvider));
         return session->m_impl->WhenReady().then(arcana::inline_scheduler, arcana::cancellation::none(), [session] {
             return session;
         });
     }
 
-    System::Session::Session(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider)
+    System::Session::Session(System& system, void* graphicsDevice, void* commandQueue, std::function<WindowT()> windowProvider)
         : m_impl{ std::make_unique<System::Session::Impl>(*system.m_impl, graphicsDevice, commandQueue, std::move(windowProvider)) } {}
 
     System::Session::~Session() {

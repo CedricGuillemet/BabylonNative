@@ -43,7 +43,7 @@ class ViewController: UIViewController {
             screenScale:Float(UIScreen.main.scale),
             width:Int32(width * scale),
             height:Int32(height * scale),
-            xrView:Unmanaged.passUnretained(xrView).toOpaque()
+            xrView:xrView.layer as! CAMetalLayer
         )
     }
   

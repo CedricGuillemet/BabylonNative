@@ -25,7 +25,7 @@ float screenScale{1.0f};
     appContext.reset();
 }
 
-- (void)init:(MTKView*)view screenScale:(float)inScreenScale width:(int)inWidth height:(int)inHeight xrView:(void*)xrView
+- (void)init:(MTKView*)view screenScale:(float)inScreenScale width:(int)inWidth height:(int)inHeight xrView:(CAMetalLayer*)xrLayer
 {
     screenScale = inScreenScale;
 
@@ -36,9 +36,9 @@ float screenScale{1.0f};
         [](const char* message) {
             NSLog(@"%s", message);
         },
-        [xrView](Napi::Env env) {
+        [xrLayer](Napi::Env env) {
             nativeXr.emplace(Babylon::Plugins::NativeXr::Initialize(env));
-            nativeXr->UpdateWindow(reinterpret_cast<Babylon::Graphics::WindowT>(xrView));
+            nativeXr->UpdateWindow((__bridge CA::MetalLayer*)xrLayer);
             nativeXr->SetSessionStateChangedCallback([](bool isXrActive){ ::isXrActive = isXrActive; });
         });
 
