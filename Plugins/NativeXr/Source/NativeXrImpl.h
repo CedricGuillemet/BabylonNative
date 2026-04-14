@@ -9,7 +9,7 @@ namespace Babylon
         public:
             explicit Impl(Napi::Env);
 
-            void UpdateWindow(void* windowPtr);
+            void UpdateWindow(Graphics::WindowT window);
             void SetSessionStateChangedCallback(std::function<void(bool)> callback);
 
             arcana::task<void, std::exception_ptr> BeginSessionAsync();
@@ -93,7 +93,7 @@ namespace Babylon
             JsRuntimeScheduler m_runtimeScheduler;
             std::mutex m_sessionStateChangedCallbackMutex{};
             std::function<void(bool)> m_sessionStateChangedCallback{};
-            void* m_windowPtr{};
+            Graphics::WindowT m_windowPtr{};
             std::optional<arcana::task<void, std::exception_ptr>> m_beginTask{};
             arcana::task<void, std::exception_ptr> m_endTask{arcana::task_from_result<std::exception_ptr>()};
 

@@ -38,7 +38,7 @@ float screenScale{1.0f};
         },
         [xrView](Napi::Env env) {
             nativeXr.emplace(Babylon::Plugins::NativeXr::Initialize(env));
-            nativeXr->UpdateWindow(xrView);
+            nativeXr->UpdateWindow(reinterpret_cast<Babylon::Graphics::WindowT>(xrView));
             nativeXr->SetSessionStateChangedCallback([](bool isXrActive){ ::isXrActive = isXrActive; });
         });
 

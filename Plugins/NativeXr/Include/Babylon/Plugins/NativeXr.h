@@ -2,6 +2,7 @@
 
 #include <napi/env.h>
 #include <Babylon/Api.h>
+#include <Babylon/Graphics/Platform.h>
 
 namespace Babylon::Plugins
 {
@@ -20,7 +21,7 @@ namespace Babylon::Plugins
 
         static NativeXr BABYLON_API Initialize(Napi::Env env);
 
-        void UpdateWindow(void* windowPtr);
+        void UpdateWindow(Graphics::WindowT window);
         void SetSessionStateChangedCallback(std::function<void(bool)> callback);
 
     private:

@@ -75,9 +75,9 @@ namespace Babylon
             return {impl};
         }
 
-        void NativeXr::UpdateWindow(void* windowPtr)
+        void NativeXr::UpdateWindow(Graphics::WindowT window)
         {
-            m_impl->UpdateWindow(windowPtr);
+            m_impl->UpdateWindow(window);
         }
 
         void NativeXr::SetSessionStateChangedCallback(std::function<void(bool)> callback)
