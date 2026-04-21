@@ -87,6 +87,14 @@ namespace Babylon::Plugins
         int32_t sensorRotationDiff{};
         bool updateTextureDimensions{true};
 
+        // Active sensor pixel array bounds (left, top, right, bottom) — used for crop-based zoom on API < 30
+        int32_t activeSensorLeft{};
+        int32_t activeSensorTop{};
+        int32_t activeSensorRight{};
+        int32_t activeSensorBottom{};
+        // True when ACAMERA_CONTROL_ZOOM_RATIO is available (API 30+)
+        bool zoomRatioSupported{false};
+
         Graphics::DeviceContext* deviceContext{};
 
         API24::ACameraDevice* aCameraDevice{};
@@ -376,12 +384,39 @@ namespace Babylon::Plugins
             CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_FLASH_INFO_AVAILABLE, &metaDataEntry);
             bool torchSupported = metaDataEntry.data.u8[0];
 
-            CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_CONTROL_ZOOM_RATIO, &metaDataEntry);
-            float zoomRatio{metaDataEntry.data.f[0]};
+            // Read active sensor array bounds (left, top, right, bottom) needed for crop-based zoom on API < 30
+            if (CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &metaDataEntry) == API24::ACAMERA_OK &&
+                metaDataEntry.count >= 4)
+            {
+                cameraDeviceImpl->activeSensorLeft   = metaDataEntry.data.i32[0];
+                cameraDeviceImpl->activeSensorTop    = metaDataEntry.data.i32[1];
+                cameraDeviceImpl->activeSensorRight  = metaDataEntry.data.i32[2];
+                cameraDeviceImpl->activeSensorBottom = metaDataEntry.data.i32[3];
+            }
 
-            CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_CONTROL_ZOOM_RATIO_RANGE, &metaDataEntry);
-            float minZoomRatio{metaDataEntry.data.f[0]};
-            float maxZoomRatio{metaDataEntry.data.f[1]};
+            // ACAMERA_CONTROL_ZOOM_RATIO_RANGE requires API 30+; fall back to crop-based digital zoom on older APIs
+            float minZoomRatio{1.0f};
+            float maxZoomRatio{1.0f};
+            if (API_LEVEL >= 30)
+            {
+                if (CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_CONTROL_ZOOM_RATIO_RANGE, &metaDataEntry) == API24::ACAMERA_OK &&
+                    metaDataEntry.count >= 2)
+                {
+                    minZoomRatio = metaDataEntry.data.f[0];
+                    maxZoomRatio = metaDataEntry.data.f[1];
+                    cameraDeviceImpl->zoomRatioSupported = true;
+                }
+            }
+            if (!cameraDeviceImpl->zoomRatioSupported)
+            {
+                // ACAMERA_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM is available from API 24 and gives the
+                // maximum zoom achievable via crop-region; min is always 1.0 with this method
+                if (CAMERA_FUNCTION(ACameraMetadata_getConstEntry, metadataObj, API24::ACAMERA_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, &metaDataEntry) == API24::ACAMERA_OK &&
+                    metaDataEntry.count > 0)
+                {
+                    maxZoomRatio = metaDataEntry.data.f[0];
+                }
+            }
 
             // Update the cameraDevice information
             cameraDeviceImpl->cameraID = id;
@@ -411,12 +446,32 @@ namespace Babylon::Plugins
 
             cameraDeviceImpl->capabilities.push_back(std::make_unique<CameraCapabilityTemplate<double>>(
                 Capability::Feature::Zoom,
-                zoomRatio,
+                1.0, // initial zoom is always 1.0x
                 1.0, // Set the default target zoom to 1.0 (no zoom)
                 std::vector<double>{minZoomRatio, maxZoomRatio},
                 [impl{cameraDeviceImpl.get()}](double newValue) {
-                    float newZoomRatio{static_cast<float>(newValue)};
-                    CAMERA_FUNCTION(ACaptureRequest_setEntry_float, impl->request, API24::ACAMERA_CONTROL_ZOOM_RATIO, 1, &newZoomRatio);
+                    if (impl->zoomRatioSupported)
+                    {
+                        // API 30+: use ACAMERA_CONTROL_ZOOM_RATIO directly
+                        float newZoomRatio{static_cast<float>(newValue)};
+                        CAMERA_FUNCTION(ACaptureRequest_setEntry_float, impl->request, API24::ACAMERA_CONTROL_ZOOM_RATIO, 1, &newZoomRatio);
+                    }
+                    else
+                    {
+                        // API < 30: emulate zoom via sensor crop region (zoom-in only, min 1.0)
+                        int32_t sensorWidth{impl->activeSensorRight - impl->activeSensorLeft};
+                        int32_t sensorHeight{impl->activeSensorBottom - impl->activeSensorTop};
+                        if (sensorWidth > 0 && sensorHeight > 0)
+                        {
+                            float zoomFactor{static_cast<float>(newValue)};
+                            int32_t cropWidth{static_cast<int32_t>(sensorWidth / zoomFactor)};
+                            int32_t cropHeight{static_cast<int32_t>(sensorHeight / zoomFactor)};
+                            int32_t cropLeft{impl->activeSensorLeft + (sensorWidth - cropWidth) / 2};
+                            int32_t cropTop{impl->activeSensorTop + (sensorHeight - cropHeight) / 2};
+                            int32_t cropRegion[4]{cropLeft, cropTop, cropLeft + cropWidth, cropTop + cropHeight};
+                            CAMERA_FUNCTION(ACaptureRequest_setEntry_i32, impl->request, API24::ACAMERA_SCALER_CROP_REGION, 4, cropRegion);
+                        }
+                    }
 
                     // Update the camera request
                     CAMERA_FUNCTION(ACameraCaptureSession_setRepeatingRequest, impl->textureSession, &captureCallbacks, 1, &impl->request, nullptr);
