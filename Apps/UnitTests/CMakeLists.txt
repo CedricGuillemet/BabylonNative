@@ -11,17 +11,32 @@ set(BABYLONJS_MATERIALS_ASSETS
     "../node_modules/babylonjs-materials/babylonjs.materials.js")
 
 set(TEST_ASSETS
+    "JavaScript/dist/tests.externalTexture.deviceLoss.js"
+    "JavaScript/dist/tests.externalTexture.msaa.js"
     "JavaScript/dist/tests.javaScript.all.js"
-    "JavaScript/dist/tests.nativeEngine.shaderCache.js")
+    "JavaScript/dist/tests.shaderCache.basicScene.js"
+    "JavaScript/dist/tests.shaderCompilation.comprehensiveGLSL.js")
+
+file(GLOB TEST_SCRIPTS "JavaScript/src/*.ts")
+set_source_files_properties(${TEST_SCRIPTS} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
     "Source/Tests.ExternalTexture.cpp"
+    "Source/Tests.ExternalTexture.DeviceLoss.cpp"
+    "Source/Tests.ExternalTexture.Msaa.cpp"
     "Source/Tests.JavaScript.cpp"
-    "Source/Tests.NativeEngine.cpp"
-    "Source/Utils.h"
-    "Source/Utils.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+    "Source/Tests.ShaderCache.cpp"
+    "Source/Tests.ShaderCompilation.cpp"
+    "Source/Tests.UniformPadding.cpp"
+    "Source/Helpers.h"
+    "Source/Helpers.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+
+if(GRAPHICS_API STREQUAL "D3D11" OR GRAPHICS_API STREQUAL "D3D12")
+    set(SOURCES ${SOURCES}
+        "Source/Tests.Device.cpp")
+endif()
 
 if(GRAPHICS_API STREQUAL "D3D11")
     set(SOURCES ${SOURCES}
@@ -45,9 +60,7 @@ elseif(WIN32)
     set(SOURCES ${SOURCES} "Source/App.Win32.cpp")
 endif()
 
-add_executable(UnitTests ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS} ${SOURCES})
-set_property(TARGET UnitTests PROPERTY UNITY_BUILD false)
-
+add_executable(UnitTests ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS} ${TEST_SCRIPTS} ${SOURCES})
 target_link_libraries(UnitTests
     PRIVATE AppRuntime
     PRIVATE Blob
@@ -58,7 +71,7 @@ target_link_libraries(UnitTests
     PRIVATE NativeEngine
     PRIVATE NativeEncoding
     PRIVATE ScriptLoader
-    PRIVATE UrlLib
+    PRIVATE ShaderCache
     PRIVATE Window
     PRIVATE XMLHttpRequest
     PRIVATE gtest_main
@@ -66,12 +79,24 @@ target_link_libraries(UnitTests
 
 target_compile_definitions(UnitTests PRIVATE ${ADDITIONAL_COMPILE_DEFINITIONS})
 
+if(GRAPHICS_API STREQUAL "D3D12")
+    target_compile_definitions(UnitTests PRIVATE SKIP_RENDER_TESTS)
+endif()
+
 add_test(NAME UnitTests COMMAND UnitTests)
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET UnitTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:UnitTests>>,copy,true> $<TARGET_RUNTIME_DLLS:UnitTests> $<TARGET_FILE_DIR:UnitTests> COMMAND_EXPAND_LISTS)
+
+if(ANGLE_LIBEGL)
+    add_custom_command(TARGET UnitTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBEGL}" "$<TARGET_FILE_DIR:UnitTests>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBGLESV2}" "$<TARGET_FILE_DIR:UnitTests>"
+        COMMENT "Copying ANGLE libraries to UnitTests output directory"
+    )
+endif()
 
 foreach(ASSET ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS})
     get_filename_component(ASSET_NAME "${ASSET}" NAME)
@@ -87,3 +112,4 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/../node_modules/babylonjs PREFIX Assets FILES ${BABYLONJS_ASSETS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/../node_modules/babylonjs-materials PREFIX Assets FILES ${BABYLONJS_MATERIALS_ASSETS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/JavaScript/dist PREFIX Assets FILES ${TEST_ASSETS})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/JavaScript/src PREFIX TypeScript FILES ${TEST_SCRIPTS})

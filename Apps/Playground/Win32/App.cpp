@@ -2,7 +2,10 @@
 //
 
 #include "App.h"
-
+#include <Shared/AppContext.h>
+#include <Shared/CommandLine.h>
+#include <Shared/Diagnostics.h>
+#include <Babylon/Plugins/TestUtils.h>
 #include <Windows.h>
 #include <Windowsx.h>
 #include <Shlwapi.h>
@@ -11,41 +14,17 @@
 #include <optional>
 #include <sstream>
 
-#include <Babylon/AppRuntime.h>
-#include <Babylon/Graphics/Device.h>
-#include <Babylon/ScriptLoader.h>
-//#include <Babylon/Plugins/NativeCapture.h>
-//#include <Babylon/Plugins/NativeEncoding.h>
-#include <Babylon/Plugins/NativeEngine.h>
-//#include <Babylon/Plugins/NativeOptimizations.h>
-//#include <Babylon/Plugins/NativeCamera.h>
-//#include <Babylon/Plugins/NativeInput.h>
-//#include <Babylon/Plugins/TestUtils.h>
-//#include <Babylon/Polyfills/Blob.h>
-#include <Babylon/Polyfills/Console.h>
-#include <Babylon/Polyfills/Window.h>
-//#include <Babylon/Polyfills/XMLHttpRequest.h>
-//#include <Babylon/Polyfills/Canvas.h>
-#include <Babylon/ShaderCache.h>
-#include <Babylon/DebugTrace.h>
-#include <iostream>
-#include <fstream>
 
 #define MAX_LOADSTRING 100
-
-const char* cache_path = "E:\\dev\\babylon\\BNQuickJS\\build\\Apps\\Playground\\Debug\\Scripts\\ShaderCacheDump.bin";
 
 // Global Variables:
 HINSTANCE hInst;                     // current instance
 WCHAR szTitle[MAX_LOADSTRING];       // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING]; // the main window class name
-std::optional<Babylon::AppRuntime> runtime{};
-std::optional<Babylon::Graphics::Device> device{};
-std::optional<Babylon::Graphics::DeviceUpdate> update{};
-//Babylon::Plugins::NativeInput* nativeInput{};
-//std::optional<Babylon::Polyfills::Canvas> nativeCanvas{};
+std::optional<AppContext> appContext{};
 bool minimized{false};
 int buttonRefCount{0};
+PlaygroundOptions options{};
 
 // Forward declarations of functions included in this code module:
 ATOM MyRegisterClass(HINSTANCE hInstance);
@@ -55,26 +34,11 @@ INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
 
 namespace
 {
-    const char* GetLogLevelString(Babylon::Polyfills::Console::LogLevel logLevel)
-    {
-        switch (logLevel)
-        {
-            case Babylon::Polyfills::Console::LogLevel::Log:
-                return "Log";
-            case Babylon::Polyfills::Console::LogLevel::Warn:
-                return "Warn";
-            case Babylon::Polyfills::Console::LogLevel::Error:
-                return "Error";
-            default:
-                return "";
-        }
-    }
-    
     std::string GetUrlFromPath(const std::filesystem::path& path)
     {
         char url[1024];
         DWORD length = ARRAYSIZE(url);
-        HRESULT hr = UrlCreateFromPathA(path.u8string().data(), url, &length, 0);
+        HRESULT hr = UrlCreateFromPathA(reinterpret_cast<const char*>(path.u8string().data()), url, &length, 0);
         if (FAILED(hr))
         {
             throw std::exception("Failed to create url from path", hr);
@@ -91,7 +55,8 @@ namespace
         std::vector<std::string> arguments{};
         arguments.reserve(argc);
 
-        for (int idx = 1; idx < argc; idx++)
+        // Include argv[0]; CommandLine::Parse() skips it itself.
+        for (int idx = 0; idx < argc; idx++)
         {
             std::wstring hstr{argv[idx]};
             int bytesRequired = ::WideCharToMultiByte(CP_UTF8, 0, &hstr[0], static_cast<int>(hstr.size()), nullptr, 0, nullptr, nullptr);
@@ -106,17 +71,7 @@ namespace
 
     void Uninitialize()
     {
-        if (device)
-        {
-            update->Finish();
-            device->FinishRenderingCurrentFrame();
-        }
-
-        //nativeCanvas.reset();
-        //nativeInput = {};
-        runtime.reset();
-        update.reset();
-        device.reset();
+        appContext.reset();
     }
 
     void RefreshBabylon(HWND hWnd)
@@ -126,159 +81,55 @@ namespace
         RECT rect;
         if (!GetClientRect(hWnd, &rect))
         {
-            return;
+            throw std::exception{"Unable to get client rect"};
         }
-
-        Babylon::DebugTrace::EnableDebugTrace(true);
-        Babylon::DebugTrace::SetTraceOutput([](const char* trace) {
-            OutputDebugStringA(trace);
-            OutputDebugStringA("\n");
-        });
 
         auto width = static_cast<size_t>(rect.right - rect.left);
         auto height = static_cast<size_t>(rect.bottom - rect.top);
 
-        Babylon::Graphics::Configuration graphicsConfig{};
-        graphicsConfig.Window = hWnd;
-        graphicsConfig.Width = width;
-        graphicsConfig.Height = height;
-        graphicsConfig.MSAASamples = 4;
-
-        device.emplace(graphicsConfig);
-        update.emplace(device->GetUpdate("update"));
-
-        Babylon::ShaderCache::Enabled(true);
-
-        device->StartRenderingCurrentFrame();
-        update->Start();
-
-        Babylon::AppRuntime::Options options{};
-
-        options.EnableDebugger = true;
-
-options.UnhandledExceptionHandler = [hWnd](const Napi::Error& error) {
-            std::ostringstream ss{};
-            ss << "[Uncaught Error] " << error.Message() << std::endl;
-            ss << error.what() << std::endl;
-
-            // Try to get the stack trace
-            auto value = error.Value();
-            if (value.IsObject())
-            {
-                auto errorObj = value.As<Napi::Object>();
-
-                // Get stack trace if available
-                if (errorObj.Has("stack"))
+        appContext.emplace(
+            hWnd,
+            width,
+            height,
+            [](const char* message) {
+                // Normalize trailing newline (bgfx traceVargs adds one;
+                // others don't) so we don't produce blank lines.
+                std::string text{message};
+                while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
                 {
-                    auto stack = errorObj.Get("stack");
-                    if (stack.IsString())
-                    {
-                        ss << "Stack: " << stack.As<Napi::String>().Utf8Value() << std::endl;
-                    }
+                    text.pop_back();
                 }
+                text.push_back('\n');
+                OutputDebugStringA(text.c_str());
+                // Use C stdio (unbuffered, set in wWinMain) so each line
+                // reaches the pipe even when the process exits via
+                // std::quick_exit / TestUtils.exit() without unwinding.
+                std::fputs(text.c_str(), stdout);
+            },
+            AppContext::AdditionalInitCallback{},
+            options);
 
-                // Get line number if available
-                if (errorObj.Has("lineNumber"))
-                {
-                    auto lineNumber = errorObj.Get("lineNumber");
-                    if (lineNumber.IsNumber())
-                    {
-                        ss << "Line: " << lineNumber.As<Napi::Number>().Int32Value() << std::endl;
-                    }
-                }
-
-                // Get file name if available
-                if (errorObj.Has("fileName"))
-                {
-                    auto fileName = errorObj.Get("fileName");
-                    if (fileName.IsString())
-                    {
-                        ss << "File: " << fileName.As<Napi::String>().Utf8Value() << std::endl;
-                    }
-                }
-            }
-
-            OutputDebugStringA(ss.str().data());
-            std::cerr << ss.str();
-            std::cerr.flush();
-
-            PostMessage(hWnd, WM_CLOSE, 0, 0);
-        };
-
-        runtime.emplace(options);
-
-        runtime->Dispatch([hWnd](Napi::Env env) {
-            device->AddToJavaScript(env);
-
-            //Babylon::Polyfills::Blob::Initialize(env);
-            
-            Babylon::Polyfills::Console::Initialize(env, [](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
-                std::ostringstream ss{};
-                ss << "[" << GetLogLevelString(logLevel) << "] " << message << std::endl;
-                OutputDebugStringA(ss.str().data());
-
-                std::cout << ss.str();
-                std::cout.flush();
-            });
-            
-            Babylon::Polyfills::Window::Initialize(env);
-
-            //Babylon::Polyfills::XMLHttpRequest::Initialize(env);
-
-            //nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
-
-            //Babylon::Plugins::NativeEncoding::Initialize(env);
-
-            Babylon::Plugins::NativeEngine::Initialize(env);
-
-            //Babylon::Plugins::NativeOptimizations::Initialize(env);
-
-            //Babylon::Plugins::NativeCapture::Initialize(env);
-
-            //Babylon::Plugins::NativeCamera::Initialize(env);
-
-            //nativeInput = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
-
-            //Babylon::Plugins::TestUtils::Initialize(env, hWnd);
-        });
-
-        Babylon::ScriptLoader loader{*runtime};
-#if 0
-        loader.LoadScript("app:///Scripts/ammo.js");
-        // Commenting out recast.js for now because v8jsi is incompatible with asm.js.
-        // loader.LoadScript("app:///Scripts/recast.js");
-        loader.LoadScript("app:///Scripts/babylon.max.js");
-        loader.LoadScript("app:///Scripts/babylonjs.loaders.js");
-        loader.LoadScript("app:///Scripts/babylonjs.materials.js");
-        loader.LoadScript("app:///Scripts/babylon.gui.js");
-        loader.LoadScript("app:///Scripts/meshwriter.min.js");
-        loader.LoadScript("app:///Scripts/babylonjs.serializers.js");
-
-        std::vector<std::string> scripts = GetCommandLineArguments();
-        if (scripts.empty())
+        if (options.Scripts.empty())
         {
-            loader.LoadScript("app:///Scripts/experience.js");
+            appContext->ScriptLoader().LoadScript("app:///Scripts/experience.js");
         }
         else
         {
-            for (const auto& script : scripts)
+            for (const auto& arg : options.Scripts)
             {
-                loader.LoadScript(GetUrlFromPath(script));
+                appContext->ScriptLoader().LoadScript(GetUrlFromPath(arg));
             }
 
-            loader.LoadScript("app:///Scripts/playground_runner.js");
+            appContext->ScriptLoader().LoadScript("app:///Scripts/playground_runner.js");
         }
-#else
-        //loader.LoadScript("app:///Scripts/toto-babel.js");
-        std::ifstream shaderCacheDumpFile{cache_path, std::ios::binary};
-        Babylon::ShaderCache::Deserialize(shaderCacheDumpFile);
-        loader.LoadScript("app:///Scripts/toto4.js");
-#endif
     }
 
     void UpdateWindowSize(size_t width, size_t height)
     {
-        device->UpdateSize(width, height);
+        if (appContext)
+        {
+            appContext->Device().UpdateSize(width, height);
+        }
     }
 }
 
@@ -290,14 +141,60 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
+    // SUBSYSTEM:CONSOLE (see CMakeLists.txt) gives us inherited stdio.
+    // UTF-8 output so callstacks / non-ASCII filenames survive.
+    ::SetConsoleOutputCP(CP_UTF8);
+
+    // Unbuffered stdout/stderr so the tail of the log reaches the pipe even
+    // when we exit via std::quick_exit / _Exit / TestUtils.exit(). MSVC's
+    // CRT aliases _IOLBF to _IOFBF, so _IONBF is the only correct choice.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+
+    // Hook crash + assert handlers as early as possible.
+    Diagnostics::Initialize();
+
+    // Route TestUtils.exit(code) to the finish line. Fires on the JS thread
+    // before the platform's default exit (quick_exit / PostMessage).
+    Babylon::Plugins::TestUtils::SetExitCallback([](int code) {
+        Diagnostics::SetExitCode(code);
+        Diagnostics::PrintFinishLine();
+    });
+
+    // Parse argv before creating any window so --help / --list don't pop one.
+    auto args = GetCommandLineArguments();
+    std::vector<const char*> argv;
+    argv.reserve(args.size());
+    for (const auto& a : args)
+    {
+        argv.push_back(a.c_str());
+    }
+    options = CommandLine::Parse(static_cast<int>(argv.size()), argv.data());
+
+    if (options.ParseError)
+    {
+        std::fprintf(stderr, "Error: %s\n\n", options.ErrorMessage.c_str());
+        CommandLine::PrintUsage(argv.empty() ? nullptr : argv[0]);
+        Diagnostics::SetExitCode(2);
+        return 2;
+    }
+
+    if (options.ShowHelp)
+    {
+        CommandLine::PrintUsage(argv.empty() ? nullptr : argv[0]);
+        Diagnostics::SetExitCode(0);
+        return 0;
+    }
+
     // Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_PLAYGROUNDWIN32, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
     // Perform application initialization:
-    if (!InitInstance(hInstance, nCmdShow))
+    if (!InitInstance(hInstance, options.Headless ? SW_HIDE : nCmdShow))
     {
+        Diagnostics::SetExitCode(FALSE);
         return FALSE;
     }
 
@@ -316,25 +213,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
         else
         {
-            if (device)
+            if (appContext)
             {
-                update->Finish();
-                device->FinishRenderingCurrentFrame();
-                device->StartRenderingCurrentFrame();
-                update->Start();
-                /*/
-                static int frame = 0;
-                static bool dumped = false;
-                frame++;
-                if (frame > 1000 && !dumped)
-                {
-                    std::ofstream shaderCacheDumpFile{cache_path, std::ios::binary};
-                    if (Babylon::ShaderCache::Serialize(shaderCacheDumpFile))
-                    {
-                    
-                        dumped = true;
-                    }
-                }*/
+                appContext->DeviceUpdate().Finish();
+                appContext->Device().FinishRenderingCurrentFrame();
+                appContext->Device().StartRenderingCurrentFrame();
+                appContext->DeviceUpdate().Start();
             }
 
             result = PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE) && msg.message != WM_QUIT;
@@ -350,6 +234,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
     }
 
+    Diagnostics::SetExitCode(static_cast<int>(msg.wParam));
     return (int)msg.wParam;
 }
 
@@ -409,32 +294,31 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     return TRUE;
 }
-/*
+
 void ProcessMouseButtons(tagPOINTER_BUTTON_CHANGE_TYPE changeType, int x, int y)
 {
     switch (changeType)
     {
         case POINTER_CHANGE_FIRSTBUTTON_DOWN:
-            nativeInput->MouseDown(Babylon::Plugins::NativeInput::LEFT_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseDown(Babylon::Plugins::NativeInput::LEFT_MOUSE_BUTTON_ID, x, y);
             break;
         case POINTER_CHANGE_FIRSTBUTTON_UP:
-            nativeInput->MouseUp(Babylon::Plugins::NativeInput::LEFT_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseUp(Babylon::Plugins::NativeInput::LEFT_MOUSE_BUTTON_ID, x, y);
             break;
         case POINTER_CHANGE_SECONDBUTTON_DOWN:
-            nativeInput->MouseDown(Babylon::Plugins::NativeInput::RIGHT_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseDown(Babylon::Plugins::NativeInput::RIGHT_MOUSE_BUTTON_ID, x, y);
             break;
         case POINTER_CHANGE_SECONDBUTTON_UP:
-            nativeInput->MouseUp(Babylon::Plugins::NativeInput::RIGHT_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseUp(Babylon::Plugins::NativeInput::RIGHT_MOUSE_BUTTON_ID, x, y);
             break;
         case POINTER_CHANGE_THIRDBUTTON_DOWN:
-            nativeInput->MouseDown(Babylon::Plugins::NativeInput::MIDDLE_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseDown(Babylon::Plugins::NativeInput::MIDDLE_MOUSE_BUTTON_ID, x, y);
             break;
         case POINTER_CHANGE_THIRDBUTTON_UP:
-            nativeInput->MouseUp(Babylon::Plugins::NativeInput::MIDDLE_MOUSE_BUTTON_ID, x, y);
+            appContext->Input()->MouseUp(Babylon::Plugins::NativeInput::MIDDLE_MOUSE_BUTTON_ID, x, y);
             break;
     }
 }
-*/
 
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
@@ -454,13 +338,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             if ((wParam & 0xFFF0) == SC_MINIMIZE)
             {
-                if (device)
+                if (appContext)
                 {
-                    update->Finish();
-                    device->FinishRenderingCurrentFrame();
-                }
+                    appContext->DeviceUpdate().Finish();
+                    appContext->Device().FinishRenderingCurrentFrame();
 
-                runtime->Suspend();
+                    appContext->Runtime().Suspend();
+                }
 
                 minimized = true;
             }
@@ -468,14 +352,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 if (minimized)
                 {
-                    runtime->Resume();
-
                     minimized = false;
 
-                    if (device)
+                    if (appContext)
                     {
-                        device->StartRenderingCurrentFrame();
-                        update->Start();
+                        appContext->Runtime().Resume();
+
+                        appContext->Device().StartRenderingCurrentFrame();
+                        appContext->DeviceUpdate().Start();
                     }
                 }
             }
@@ -501,18 +385,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         case WM_SIZE:
         {
-            if (device)
-            {
-                auto width = static_cast<size_t>(LOWORD(lParam));
-                auto height = static_cast<size_t>(HIWORD(lParam));
-                UpdateWindowSize(width, height);
-            }
+            auto width = static_cast<size_t>(LOWORD(lParam));
+            auto height = static_cast<size_t>(HIWORD(lParam));
+            UpdateWindowSize(width, height);
             break;
         }
         case WM_DESTROY:
         {
             Uninitialize();
-            //PostQuitMessage(Babylon::Plugins::TestUtils::errorCode);
+            PostQuitMessage(0);
             break;
         }
         case WM_KEYDOWN:
@@ -523,18 +404,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
-            /*
         case WM_POINTERWHEEL:
         {
-            if (nativeInput != nullptr)
+            if (appContext && appContext->Input())
             {
-                nativeInput->MouseWheel(Babylon::Plugins::NativeInput::MOUSEWHEEL_Y_ID, -GET_WHEEL_DELTA_WPARAM(wParam));
+                appContext->Input()->MouseWheel(Babylon::Plugins::NativeInput::MOUSEWHEEL_Y_ID, -GET_WHEEL_DELTA_WPARAM(wParam));
             }
             break;
         }
         case WM_POINTERDOWN:
         {
-            if (nativeInput != nullptr)
+            if (appContext && appContext->Input())
             {
                 POINTER_INFO info;
                 auto pointerId = GET_POINTERID_WPARAM(wParam);
@@ -551,7 +431,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                     else
                     {
-                        nativeInput->TouchDown(pointerId, x, y);
+                        appContext->Input()->TouchDown(pointerId, x, y);
                     }
                 }
             }
@@ -559,7 +439,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         case WM_POINTERUPDATE:
         {
-            if (nativeInput != nullptr)
+            if (appContext && appContext->Input())
             {
                 auto pointerId = GET_POINTERID_WPARAM(wParam);
                 POINTER_INFO info;
@@ -573,11 +453,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     if (info.pointerType == PT_MOUSE)
                     {
                         ProcessMouseButtons(info.ButtonChangeType, x, y);
-                        nativeInput->MouseMove(x, y);
+                        appContext->Input()->MouseMove(x, y);
                     }
                     else
                     {
-                        nativeInput->TouchMove(pointerId, x, y);
+                        appContext->Input()->TouchMove(pointerId, x, y);
                     }
                 }
             }
@@ -585,7 +465,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         case WM_POINTERUP:
         {
-            if (nativeInput != nullptr)
+            if (appContext && appContext->Input())
             {
                 auto pointerId = GET_POINTERID_WPARAM(wParam);
                 POINTER_INFO info;
@@ -602,13 +482,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                     else
                     {
-                        nativeInput->TouchUp(pointerId, x, y);
+                        appContext->Input()->TouchUp(pointerId, x, y);
                     }
                 }
             }
             break;
         }
-        */
         default:
         {
             return DefWindowProc(hWnd, message, wParam, lParam);

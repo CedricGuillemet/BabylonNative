@@ -7,7 +7,10 @@ module.exports = {
   devtool: false,
   entry: {
     "tests.javaScript.all": './src/tests.javaScript.all.ts',
-    "tests.nativeEngine.shaderCache": './src/tests.nativeEngine.shaderCache.ts',
+    "tests.shaderCache.basicScene": './src/tests.shaderCache.basicScene.ts',
+    "tests.shaderCompilation.comprehensiveGLSL": './src/tests.shaderCompilation.comprehensiveGLSL.ts',
+    "tests.externalTexture.msaa": './src/tests.externalTexture.msaa.ts',
+    "tests.externalTexture.deviceLoss": './src/tests.externalTexture.deviceLoss.ts',
   },
   externals: {
     "@babylonjs/core": "BABYLON",

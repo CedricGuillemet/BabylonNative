@@ -18,6 +18,14 @@ set(SCRIPTS
     "Scripts/validation_native.js"
     "Scripts/config.json")
 
+set(SOURCES
+    "Shared/AppContext.cpp"
+    "Shared/AppContext.h"
+    "Shared/CommandLine.cpp"
+    "Shared/CommandLine.h"
+    "Shared/Diagnostics.cpp"
+    "Shared/Diagnostics.h")
+
 if(APPLE)
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
     if(IOS)
@@ -28,8 +36,7 @@ if(APPLE)
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/LaunchScreen.storyboard")
         set(RESOURCE_FILES ${STORYBOARD} ${SCRIPTS})
         set(ADDITIONAL_LIBRARIES PRIVATE z NativeXr)
-        set(SOURCES
-            ${SOURCES}
+        set(SOURCES ${SOURCES}
             "iOS/AppDelegate.swift"
             "iOS/ViewController.swift"
             "iOS/LibNativeBridge.h"
@@ -37,13 +44,11 @@ if(APPLE)
             "AppleShared/GestureRecognizer.swift")
         set_source_files_properties(${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES} PROPERTIES MACOSX_PACKAGE_LOCATION "Scripts")
         set_source_files_properties(${REFERENCE_IMAGES} PROPERTIES MACOSX_PACKAGE_LOCATION "ReferenceImages")
-        set(ADDITIONAL_LIBRARIES ${ADDITIONAL_LIBRARIES} PRIVATE NativeCamera)
     elseif(VISIONOS)
         set(PLIST_FILE
             "${CMAKE_CURRENT_LIST_DIR}/visionOS/Info.plist")
         set(RESOURCE_FILES ${SCRIPTS})
-        set(SOURCES
-            ${SOURCES}
+        set(SOURCES ${SOURCES}
             "visionOS/App.swift"
             "visionOS/LibNativeBridge.mm"
             "visionOS/LibNativeBridge.h"
@@ -53,11 +58,9 @@ if(APPLE)
     else()
         set(PLIST_FILE "${CMAKE_CURRENT_LIST_DIR}/macOS/Info.plist")
         set(STORYBOARD "${CMAKE_CURRENT_LIST_DIR}/macOS/Base.lproj/Main.storyboard")
-        set(ADDITIONAL_LIBRARIES ${ADDITIONAL_LIBRARIES} PRIVATE NativeCamera)
         set(RESOURCE_FILES ${STORYBOARD})
-        set(SOURCES
-            ${SOURCES}
-            "macOS/main.m"
+        set(SOURCES ${SOURCES}
+            "macOS/main.mm"
             "macOS/AppDelegate.m"
             "macOS/AppDelegate.h"
             "macOS/ViewController.mm"
@@ -72,8 +75,7 @@ if(APPLE)
     string(REPLACE "-Wall" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
     string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
 elseif(UNIX)
-    set(SOURCES
-        ${SOURCES}
+    set(SOURCES ${SOURCES}
         "X11/App.cpp")
 elseif(WINDOWS_STORE)
     set(APPX_FILES "UWP/Package.appxmanifest" "UWP/TemporaryKey.pfx")
@@ -88,15 +90,13 @@ elseif(WINDOWS_STORE)
         "UWP/Assets/Wide310x150Logo.scale-200.png")
     set_property(SOURCE ${APPX_ASSETS} PROPERTY VS_DEPLOYMENT_CONTENT 1)
     set_property(SOURCE ${APPX_ASSETS} PROPERTY VS_DEPLOYMENT_LOCATION "Assets")
-    set(SOURCES
-        ${SOURCES}
+    set(SOURCES ${SOURCES}
         ${APPX_FILES}
         ${APPX_ASSETS}
         "UWP/App.cpp"
         "UWP/App.h")
 elseif(WIN32)
-    set(SOURCES
-        ${SOURCES}
+    set(SOURCES ${SOURCES}
         "Win32/App.cpp"
         "Win32/App.h"
         "Win32/App.ico"
@@ -104,12 +104,21 @@ elseif(WIN32)
         "Win32/Resource.h"
         "Win32/small.ico"
         "Win32/targetver.h")
-    set(ADDITIONAL_LIBRARIES PRIVATE NativeCamera)
 endif()
 
 if(WIN32)
-    set(WIN32_EXECUTABLE TRUE)
-    add_executable(Playground WIN32 ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    if(WINDOWS_STORE)
+        # UWP requires SUBSYSTEM:WINDOWS.
+        set(WIN32_EXECUTABLE TRUE)
+        add_executable(Playground WIN32 ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    else()
+        # Win32 desktop: SUBSYSTEM:CONSOLE so stdout/stderr behave like a
+        # normal console app. /ENTRY:wWinMainCRTStartup keeps the existing
+        # wWinMain entry point and all GUI code intact.
+        add_executable(Playground ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+        set_target_properties(Playground PROPERTIES
+            LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:wWinMainCRTStartup")
+    endif()
 else()
     add_executable(Playground ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
 endif()
@@ -119,29 +128,34 @@ target_compile_definitions(Playground PRIVATE UNICODE)
 target_compile_definitions(Playground PRIVATE _UNICODE)
 
 if(WINDOWS_STORE)
-    target_compile_options(Playground PRIVATE /ZW)
-    target_compile_options(Playground PRIVATE /await)
+    target_link_libraries(Playground PRIVATE windowsapp)
 endif()
 
-target_include_directories(Playground PRIVATE "Source" ".")
+target_include_directories(Playground PRIVATE ".")
 
 target_link_libraries(Playground
     PRIVATE AppRuntime
-    #PRIVATE Blob
-    #PRIVATE Canvas
+    PRIVATE Blob
+    PRIVATE bx
+    PRIVATE Canvas
     PRIVATE Console
-    #PRIVATE ExternalTexture
+    PRIVATE ExternalTexture
+    PRIVATE File
     PRIVATE GraphicsDevice
-    #PRIVATE NativeTracing
-    #PRIVATE NativeCapture
-    #PRIVATE NativeEncoding
+    PRIVATE NativeCamera
+    PRIVATE NativeCapture
+    PRIVATE NativeEncoding
     PRIVATE NativeEngine
-    #PRIVATE NativeInput
-    #PRIVATE NativeOptimizations
+    PRIVATE NativeInput
+    PRIVATE NativeOptimizations
+    PRIVATE NativeTracing
+    PRIVATE Performance
     PRIVATE ScriptLoader
+    PRIVATE ShaderCache
+    PRIVATE TestUtils
+    PRIVATE TextDecoder
     PRIVATE Window
-    #PRIVATE XMLHttpRequest
-    #PRIVATE TestUtils
+    PRIVATE XMLHttpRequest
     ${ADDITIONAL_LIBRARIES}
     ${BABYLON_NATIVE_PLAYGROUND_EXTENSION_LIBRARIES})
 
@@ -149,6 +163,14 @@ target_link_libraries(Playground
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET Playground POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:Playground>>,copy,true> $<TARGET_RUNTIME_DLLS:Playground> $<TARGET_FILE_DIR:Playground> COMMAND_EXPAND_LISTS)
+
+if(ANGLE_LIBEGL)
+    add_custom_command(TARGET Playground POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBEGL}" "$<TARGET_FILE_DIR:Playground>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBGLESV2}" "$<TARGET_FILE_DIR:Playground>"
+        COMMENT "Copying ANGLE libraries to Playground output directory"
+    )
+endif()
 
 if (UNIX AND NOT APPLE AND NOT ANDROID)
     # Ubuntu mixes old experimental header and new runtime libraries
@@ -163,7 +185,6 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
 
             XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
@@ -187,7 +208,6 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
 
             XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
@@ -214,11 +234,10 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
             FOLDER "Playground")
     endif()
-    set_property(TARGET Playground PROPERTY UNITY_BUILD false)
+    enable_objc_arc(Playground)
     set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)
 endif()
 
@@ -252,5 +271,3 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${REFERENCE_IMAGES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SCRIPTS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Playground)
-
-set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)

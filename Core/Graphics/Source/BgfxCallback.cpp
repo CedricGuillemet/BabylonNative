@@ -1,11 +1,20 @@
-#include "BgfxCallback.h"
-#include <bx/bx.h>
-#include <bx/string.h>
-#include <bx/platform.h>
-#include <bx/debug.h>
-#include <stdarg.h>
+#include <Babylon/Graphics/BgfxCallback.h>
 #include <bgfx/bgfx.h>
+#include <bx/bx.h>
+#include <bx/debug.h>
+#include <bx/string.h>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <stdarg.h>
+#include <stdexcept>
+
+#if BX_PLATFORM_WINDOWS
+#   ifndef WIN32_LEAN_AND_MEAN
+#       define WIN32_LEAN_AND_MEAN
+#   endif // WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace Babylon::Graphics
 {
@@ -26,16 +35,36 @@ namespace Babylon::Graphics
 
     void BgfxCallback::fatal(const char* filePath, uint16_t line, bgfx::Fatal::Enum code, const char* str)
     {
+        // Always log first. trace() routes only to OutputDebugString +
+        // optional console hook -- write to stderr too so CI captures it.
+        trace(filePath, line, "BGFX FATAL 0x%08x: %s\n", code, str);
+        std::fprintf(stderr, "[BgfxCallback] FATAL 0x%08x at %s(%u): %s\n",
+                     static_cast<unsigned>(code),
+                     filePath != nullptr ? filePath : "(null)",
+                     static_cast<unsigned>(line),
+                     str != nullptr ? str : "(null)");
+        std::fflush(stderr);
+
         if (bgfx::Fatal::DebugCheck == code)
         {
+#if BX_PLATFORM_WINDOWS
+            // Only break when a debugger is attached; otherwise the BP
+            // exception escapes as STATUS_BREAKPOINT and we lose our exit
+            // code + callstack.
+            if (::IsDebuggerPresent())
+            {
+                bx::debugBreak();
+            }
+#else
             bx::debugBreak();
+#endif
         }
-        else
-        {
-            trace(filePath, line, "BGFX 0x%08x: %s\n", code, str);
-            BX_UNUSED(code, str);
-            abort();
-        }
+
+        // Falls through (DebugCheck on no-debugger Windows, or any other
+        // Fatal code) to abort() so the SIGABRT handler in Diagnostics.cpp
+        // produces a callstack and exit code 3.
+        BX_UNUSED(code, str);
+        std::abort();
     }
 
     void BgfxCallback::traceVargs(const char* filePath, uint16_t line, const char* format, va_list argList)
@@ -87,24 +116,46 @@ namespace Babylon::Graphics
     {
     }
 
-    void BgfxCallback::screenShot(const char* /*filePath*/, uint32_t width, uint32_t height, uint32_t pitch, const void* data, uint32_t /*size*/, bool yflip)
+    void BgfxCallback::screenShot(const char* /*filePath*/, uint32_t width, uint32_t height, uint32_t pitch, bgfx::TextureFormat::Enum format, const void* data, uint32_t /*size*/, bool yflip)
     {
         assert(!m_screenShotCallbacks.empty()); // addScreenShotCallback not called before doing the screenshot call on bgfx
 
         std::vector<uint8_t> array(width * height * 4); // do not use pitch to define output size because it's padded
         uint8_t* bitmap{array.data()};
 
-        for (uint32_t py = 0; py < height; py++)
+        if (format == bgfx::TextureFormat::BGRA8)
         {
-            const uint8_t* ptr = static_cast<const uint8_t*>(data) + (yflip ? (height - py - 1) : py) * pitch;
-            for (uint32_t px = 0; px < width; px++)
+            for (uint32_t py = 0; py < height; py++)
             {
-                // bgfx screenshot is BGRA
-                *bitmap++ = ptr[px * 4 + 2];
-                *bitmap++ = ptr[px * 4 + 1];
-                *bitmap++ = ptr[px * 4 + 0];
-                *bitmap++ = ptr[px * 4 + 3];
+                const uint8_t* ptr = static_cast<const uint8_t*>(data) + (yflip ? (height - py - 1) : py) * pitch;
+                for (uint32_t px = 0; px < width; px++)
+                {
+                    // bgfx screenshot is BGRA
+                    *bitmap++ = ptr[px * 4 + 2];
+                    *bitmap++ = ptr[px * 4 + 1];
+                    *bitmap++ = ptr[px * 4 + 0];
+                    *bitmap++ = ptr[px * 4 + 3];
+                }
             }
+        }
+        else if (format == bgfx::TextureFormat::RGBA8)
+        {
+            for (uint32_t py = 0; py < height; py++)
+            {
+                const uint8_t* ptr = static_cast<const uint8_t*>(data) + (yflip ? (height - py - 1) : py) * pitch;
+                for (uint32_t px = 0; px < width; px++)
+                {
+                    // bgfx screenshot is RGBA
+                    *bitmap++ = ptr[px * 4 + 0];
+                    *bitmap++ = ptr[px * 4 + 1];
+                    *bitmap++ = ptr[px * 4 + 2];
+                    *bitmap++ = ptr[px * 4 + 3];
+                }
+            }
+        }
+        else
+        {
+            throw std::runtime_error{"Unsupported format for screenshot"};
         }
 
         m_screenShotCallbacks.front()(std::move(array));
