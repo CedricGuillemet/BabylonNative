@@ -1,4 +1,3 @@
-#if 0
 #pragma once
 
 #include <glslang/Public/ShaderLang.h>
@@ -126,4 +125,3 @@ namespace Babylon::ShaderCompilerTraversers
     /// https://github.com/bkaradzic/bgfx/blob/7be225bf490bb1cd231cfb4abf7e617bf35b59cb/src/bgfx_shader.sh#L62-L65
     void InvertYDerivativeOperands(glslang::TProgram& program);
 }
-#endif

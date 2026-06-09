@@ -1,4 +1,3 @@
-#if 0
 #include "ShaderCompilerCommon.h"
 #include <bx/bx.h>
 #include <bgfx/bgfx.h>
@@ -341,4 +340,3 @@ namespace Babylon::ShaderCompilerCommon
         return bgfxShaderInfo;
     }
 }
-#endif

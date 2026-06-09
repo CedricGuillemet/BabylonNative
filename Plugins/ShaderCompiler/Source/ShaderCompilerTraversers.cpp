@@ -1,4 +1,3 @@
-#if 0
 #include "ShaderCompilerTraversers.h"
 
 #include <glslang/Include/intermediate.h>
@@ -1653,4 +1652,3 @@ namespace Babylon::ShaderCompilerTraversers
         InvertYDerivativeOperandsTraverser::Traverse(program);
     }
 }
-#endif

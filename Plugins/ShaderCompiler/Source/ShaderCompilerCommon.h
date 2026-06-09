@@ -1,4 +1,3 @@
-#if 0
 #pragma once
 
 #include <Babylon/Plugins/ShaderCompiler.h>
@@ -84,4 +83,3 @@ namespace Babylon::ShaderCompilerCommon
 
     Graphics::BgfxShaderInfo CreateBgfxShader(ShaderInfo vertexShaderInfo, ShaderInfo fragmentShaderInfo);
 }
-#endif
