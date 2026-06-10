@@ -21,6 +21,8 @@ set(SCRIPTS
 set(SOURCES
     "Shared/AppContext.cpp"
     "Shared/AppContext.h"
+    "Shared/BenchTimer.cpp"
+    "Shared/BenchTimer.h"
     "Shared/CommandLine.cpp"
     "Shared/CommandLine.h"
     "Shared/Diagnostics.cpp"

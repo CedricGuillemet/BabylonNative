@@ -53,6 +53,12 @@ namespace Babylon::Graphics
         // When enabled, back buffer will be premultiplied with alpha value.
         bool AlphaPremultiplied{};
 
+        // When true (default), the swap chain waits for vertical sync. Set
+        // false for benchmark / latency-sensitive scenarios that want to
+        // measure render throughput without the display refresh cap.
+        // Mapped to BGFX_RESET_VSYNC in the bgfx backend.
+        bool VSync{true};
+
         // Format to use when creating the depth/stencil texture for the back buffer.
         // Specify DepthStencilFormat::None to not create a depth/stencil texture.
         DepthStencilFormat BackBufferDepthStencilFormat{DepthStencilFormat::Depth24Stencil8};

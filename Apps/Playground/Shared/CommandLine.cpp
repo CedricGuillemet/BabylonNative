@@ -232,6 +232,33 @@ namespace
                     err = "invalid --test-index value: " + ierr;
                 }
             }},
+
+        FlagSpec{"--frames", "", FlagKind::ValueRequired, "N",
+            "Render N frames then exit. Disables vsync.",
+            "                              Emits a single 'BENCH scene=... frames=... ...'\n"
+            "                              line on stdout, parsed by\n"
+            "                              tools/bench/run-bench.mjs to compute summary\n"
+            "                              statistics. When set, vsync is disabled\n"
+            "                              automatically so per-frame timings reflect\n"
+            "                              actual GPU/CPU work rather than the display\n"
+            "                              refresh cap.\n",
+            [](PlaygroundOptions& o, std::string_view value, std::string& err) {
+                int n = 0;
+                if (!ParseIntStrict(value, n) || n < 1 || n > 1000000)
+                {
+                    err = "invalid --frames value (expected positive integer): '" + std::string{value} + "'";
+                    return;
+                }
+                o.Frames = n;
+                o.NoVsync = true;
+            }},
+
+        FlagSpec{"--no-vsync", "", FlagKind::Boolean, "",
+            "Disable vsync on the swap chain.",
+            "                              Implied by --frames; can be set on its own for\n"
+            "                              interactive perf testing without a fixed frame\n"
+            "                              budget.\n",
+            [](PlaygroundOptions& o, std::string_view, std::string&) { o.NoVsync = true; }},
     };
 
     struct FlagMatch

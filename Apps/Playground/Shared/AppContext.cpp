@@ -78,6 +78,10 @@ AppContext::AppContext(
     graphicsConfig.Width = width;
     graphicsConfig.Height = height;
     graphicsConfig.MSAASamples = 4;
+    // Bench mode (--frames / --no-vsync) measures pure render throughput,
+    // not display refresh cap. Honor the CLI flag before the device is
+    // created so the BGFX_RESET_VSYNC bit is dropped on first init.
+    graphicsConfig.VSync = !playgroundOptions.NoVsync;
 
     m_device.emplace(graphicsConfig);
     m_deviceUpdate.emplace(m_device->GetUpdate("update"));

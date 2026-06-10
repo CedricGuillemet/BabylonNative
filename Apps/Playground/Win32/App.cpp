@@ -3,6 +3,7 @@
 
 #include "App.h"
 #include <Shared/AppContext.h>
+#include <Shared/BenchTimer.h>
 #include <Shared/CommandLine.h>
 #include <Shared/Diagnostics.h>
 #include <Babylon/Plugins/TestUtils.h>
@@ -202,6 +203,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     MSG msg{};
 
+    // Bench mode: per-frame timing collector that emits the BENCH line on
+    // exit. Only armed when --frames was passed; default-constructed
+    // FrameTimer with zero work otherwise.
+    Bench::FrameTimer benchTimer;
+    int benchFrames = 0;  // count of rendered frames in this session
+    std::string benchSceneName;
+    if (options.Frames > 0)
+    {
+        benchTimer.Reserve(static_cast<std::size_t>(options.Frames));
+        // Scene name comes from the first positional script arg (stem); if
+        // none was passed, fall back to "experience" (the default script).
+        if (!options.Scripts.empty())
+        {
+            benchSceneName = std::filesystem::path{options.Scripts.front()}.stem().string();
+        }
+        else
+        {
+            benchSceneName = "experience";
+        }
+    }
+
     // Main message loop:
     while (msg.message != WM_QUIT)
     {
@@ -215,10 +237,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         {
             if (appContext)
             {
+                // Time the full frame: from the moment we ask the worker to
+                // finish the previous frame's JS render-loop pass, through
+                // FinishRenderingCurrentFrame (GPU present), the next
+                // StartRenderingCurrentFrame, the next DeviceUpdate.Start
+                // (which kicks the next JS render-loop pass), AND the
+                // PeekMessage / Translate / Dispatch that follows. This
+                // matches DawnTest's notion of "frame": the wall-clock
+                // interval between two consecutive present completions, so
+                // the BENCH line values are directly comparable.
+                benchTimer.StartFrame();
                 appContext->DeviceUpdate().Finish();
                 appContext->Device().FinishRenderingCurrentFrame();
                 appContext->Device().StartRenderingCurrentFrame();
                 appContext->DeviceUpdate().Start();
+                if (options.Frames > 0)
+                {
+                    ++benchFrames;
+                    if (benchFrames >= options.Frames)
+                    {
+                        PostQuitMessage(0);
+                    }
+                }
             }
 
             result = PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE) && msg.message != WM_QUIT;
@@ -232,9 +272,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                 DispatchMessage(&msg);
             }
         }
+        // Close out the frame interval after we've drained pending window
+        // messages for this loop iteration. EndFrame is a no-op until past
+        // warmup, so it's safe to call every iteration including those
+        // where appContext is still being constructed.
+        if (!minimized && appContext)
+        {
+            benchTimer.EndFrame();
+        }
     }
 
     Diagnostics::SetExitCode(static_cast<int>(msg.wParam));
+    // Emit the BENCH line *before* return so it reaches stdout (which is
+    // unbuffered here) even when the host gets torn down by the runtime
+    // exit hook after we return.
+    if (options.Frames > 0)
+    {
+        benchTimer.PrintBenchLine(benchSceneName);
+    }
     return (int)msg.wParam;
 }
 
