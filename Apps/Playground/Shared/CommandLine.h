@@ -21,6 +21,21 @@ struct PlaygroundOptions
     std::optional<bool> DebugTrace;
     std::optional<std::string> PerfTrace;
 
+    // Benchmark mode.
+    //
+    // When `Frames > 0`, the host's render loop exits after that many
+    // rendered frames (counted post-warmup by the BenchTimer) and emits a
+    // single line of the form:
+    //   BENCH scene=<name> frames=N wall_ms=X min_ms=X avg_ms=X max_ms=X p95_ms=X
+    // on stdout, parsed by tools/bench/run-bench.mjs. Setting `Frames`
+    // implicitly enables `NoVsync` so the timing reflects actual GPU/CPU
+    // throughput rather than the display refresh cap.
+    //
+    // `NoVsync` may also be set independently of `Frames` for interactive
+    // perf testing.
+    int Frames = 0;
+    bool NoVsync = false;
+
     // 1-based frame index at which to call TestUtils.captureNextFrame()
     // (RenderDoc capture trigger). When set, the runner extends each test's
     // render budget so the .rdc finalizes. Requires renderdoc.dll to be
