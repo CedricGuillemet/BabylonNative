@@ -35,3 +35,9 @@ target_include_directories(BabylonNativeEmbedding
 target_link_libraries(BabylonNativeEmbedding
     PRIVATE bx
     PRIVATE Foundation)     # for <Babylon/PerfTrace.h> in PlaygroundScripts.cpp
+
+# Shader cache loading lives in the JNI layer (BabylonNativeEmbedding.cpp), so
+# link the plugin directly for its header + symbols.
+if(TARGET ShaderCache)
+    target_link_libraries(BabylonNativeEmbedding PRIVATE ShaderCache)
+endif()

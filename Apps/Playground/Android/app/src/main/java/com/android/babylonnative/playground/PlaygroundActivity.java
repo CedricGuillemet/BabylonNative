@@ -34,11 +34,17 @@ public class PlaygroundActivity extends Activity {
         runtimeOptions.enableDebugTrace = true;
         mRuntimeHandle = BabylonNative.runtimeCreate(runtimeOptions);
 
+        // Load a prebuilt GPU shader cache directly from the Android asset
+        // (assets/shadercache.bin) — read in native via AAssetManager, no copy.
+        // Must happen before the first View attach so the cache is populated
+        // when shaders are compiled.
+        BabylonNative.runtimeLoadShaderCache(mRuntimeHandle, "shadercache.bin");
+
         // Queue the bootstrap scripts + experience script. They run after
         // the first View attach completes engine init on the JS thread, in
         // submission order.
         loadBootstrapScripts(mRuntimeHandle);
-        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/experience.js");
+        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///toto4.js");
 
         mView = new BabylonView(getApplication(), mRuntimeHandle);
         setContentView(mView);

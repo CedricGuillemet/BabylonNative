@@ -96,6 +96,16 @@ public final class BabylonNative {
 
     public static native void runtimeLoadScript(long handle, String url);
 
+    /**
+     * Load a GPU shader cache from a local file path. Enables the shader cache
+     * and hydrates it from the binary file. Call after {@link #runtimeCreate}
+     * and before the first {@link #viewAttach(long, Surface)} so cached shaders
+     * are present at compile time. A missing/unreadable file is ignored. Throws
+     * {@link IllegalStateException} if {@code BABYLON_NATIVE_PLUGIN_SHADERCACHE}
+     * is disabled in the native build.
+     */
+    public static native void runtimeLoadShaderCache(long handle, String filename);
+
     public static native void runtimeEval(long handle, String source, String sourceUrl);
 
     // No per-Runtime Suspend/Resume here: each Runtime auto-subscribes to

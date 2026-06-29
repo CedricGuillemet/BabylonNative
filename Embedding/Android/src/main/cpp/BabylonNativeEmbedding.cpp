@@ -28,6 +28,14 @@
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 
+#if BABYLON_NATIVE_PLUGIN_SHADERCACHE
+#include <Babylon/Plugins/ShaderCache.h>
+#endif
+
+#include <android/asset_manager.h>
+
+#include <sstream>
+
 #include <jni.h>
 
 #include <cstdint>
@@ -506,6 +514,52 @@ Java_com_babylonjs_embedding_BabylonNative_runtimeLoadScript(
     JNIEnv* env, jclass, jlong handle, jstring url)
 {
     AsRuntime(handle)->LoadScript(ToStdString(env, url));
+}
+
+// Load a GPU shader cache from a local file path. Call after runtimeCreate and
+// before the first viewAttach.
+// Load a GPU shader cache directly from an Android asset (no on-disk copy).
+// `assetName` is relative to the assets root (e.g. "shadercache.bin"). Reads
+// via the process AAssetManager registered by setContext. Call after
+// runtimeCreate and before the first viewAttach.
+JNIEXPORT void JNICALL
+Java_com_babylonjs_embedding_BabylonNative_runtimeLoadShaderCache(
+    JNIEnv* env, jclass, jlong, jstring assetName)
+{
+#if BABYLON_NATIVE_PLUGIN_SHADERCACHE
+    std::string name = ToStdString(env, assetName);
+    AAssetManager* assetManager = android::global::GetAssetManager();
+    if (assetManager == nullptr)
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "BabylonNative",
+            "runtimeLoadShaderCache: no AssetManager (call setContext first).");
+        return;
+    }
+
+    AAsset* asset = AAssetManager_open(assetManager, name.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr)
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "BabylonNative",
+            "runtimeLoadShaderCache: asset '%s' not found.", name.c_str());
+        return;
+    }
+
+    Babylon::Plugins::ShaderCache::Enable();
+
+    const auto length = static_cast<size_t>(AAsset_getLength(asset));
+    const char* buffer = static_cast<const char*>(AAsset_getBuffer(asset));
+    std::istringstream stream{std::string{buffer, length}, std::ios::binary};
+    uint32_t count = Babylon::Plugins::ShaderCache::Load(stream);
+    AAsset_close(asset);
+
+    __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+        "Loaded shader cache asset '%s': %u entries", name.c_str(), count);
+#else
+    (void)env;
+    (void)assetName;
+    __android_log_print(ANDROID_LOG_ERROR, "BabylonNative",
+        "runtimeLoadShaderCache: ShaderCache plugin disabled at build time.");
+#endif
 }
 
 JNIEXPORT void JNICALL
