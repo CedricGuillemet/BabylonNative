@@ -126,6 +126,15 @@ public final class BabylonNative {
 
     public static native void viewDetach(long handle);
 
+    /** SPIKE: register a secondary SurfaceView to mirror the main render. */
+    public static native void runtimeAddSecondarySurface(long runtimeHandle, Surface surface);
+
+    /** SPIKE: detach a secondary SurfaceView and destroy its GL context. */
+    public static native void runtimeRemoveSecondarySurface(long runtimeHandle, Surface surface);
+
+    /** SPIKE: mirror the main backbuffer to secondary surfaces (per frame). */
+    public static native void runtimeMirrorFrame(long runtimeHandle);
+
     public static native void viewRenderFrame(long handle);
 
     /**

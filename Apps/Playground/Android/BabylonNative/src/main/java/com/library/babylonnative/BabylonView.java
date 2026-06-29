@@ -31,6 +31,7 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
             new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
     private final SurfaceView primarySurfaceView;
+    private final SurfaceView secondarySurfaceView;
     private final SurfaceView xrSurfaceView;
 
     /** Runtime handle borrowed from the host. Not owned by this view. */
@@ -43,10 +44,44 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
         super(context);
         mRuntimeHandle = runtimeHandle;
 
+        // Background Android UI image: the translucent secondary surface
+        // composites over this, demonstrating GL alpha -> SurfaceView opacity.
+        android.widget.ImageView bg = new android.widget.ImageView(context);
+        bg.setBackgroundColor(0xFF1E7A1E);
+        bg.setImageResource(android.R.drawable.ic_menu_compass);
+        bg.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+        this.addView(bg, new FrameLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+
+        // Two render surfaces side by side: primary drives Babylon Native; the
+        // secondary is registered as a mirror swapchain (SPIKE).
+        android.widget.LinearLayout split = new android.widget.LinearLayout(context);
+        split.setOrientation(android.widget.LinearLayout.VERTICAL);
+        split.setLayoutParams(childViewLayoutParams);
+
         this.primarySurfaceView = new SurfaceView(context);
-        this.primarySurfaceView.setLayoutParams(BabylonView.childViewLayoutParams);
         this.primarySurfaceView.getHolder().addCallback(this);
-        this.addView(this.primarySurfaceView);
+        split.addView(this.primarySurfaceView, new android.widget.LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, 0, 1f));
+
+        this.secondarySurfaceView = new SurfaceView(context);
+        // Transparent overlay: SurfaceView shows compositor alpha from the GL
+        // alpha channel mirrored into it.
+        this.secondarySurfaceView.setZOrderOnTop(true);
+        this.secondarySurfaceView.getHolder().setFormat(android.graphics.PixelFormat.TRANSLUCENT);
+        this.secondarySurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder holder) {}
+            @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                BabylonNative.runtimeAddSecondarySurface(mRuntimeHandle, holder.getSurface());
+            }
+            @Override public void surfaceDestroyed(SurfaceHolder holder) {
+                BabylonNative.runtimeRemoveSecondarySurface(mRuntimeHandle, holder.getSurface());
+            }
+        });
+        split.addView(this.secondarySurfaceView, new android.widget.LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, 0, 1f));
+
+        this.addView(split);
 
         setOnTouchListener(this);
 
@@ -149,6 +184,7 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
 
         if (mViewHandle != 0) {
             BabylonNative.viewRenderFrame(mViewHandle);
+            BabylonNative.runtimeMirrorFrame(mRuntimeHandle);
         }
         invalidate();
     }

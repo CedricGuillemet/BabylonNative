@@ -24,6 +24,10 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES3/gl3.h>
+
 #include <jni.h>
 
 #include <cstdint>
@@ -70,6 +74,116 @@ namespace
     AndroidRuntime* AsAndroidRuntime(jlong handle) { return reinterpret_cast<AndroidRuntime*>(handle); }
     Runtime* AsRuntime(jlong handle) { return AsAndroidRuntime(handle)->runtime.get(); }
     View* AsView(jlong handle) { return reinterpret_cast<View*>(handle); }
+
+    // ---- Secondary-surface mirror (self-contained, GLES) ----
+    // Each secondary SurfaceView gets its own EGL window surface + a context
+    // sharing bgfx's main GL context. Each frame, the main backbuffer is copied
+    // into a shared texture and drawn as a fullscreen quad on every surface, so
+    // they mirror the primary render. All calls happen on the render thread.
+    struct MirrorWindow
+    {
+        ANativeWindow* window;
+        EGLSurface surface;
+        EGLContext context;
+        int width;
+        int height;
+        GLuint vao;
+    };
+    std::vector<MirrorWindow> g_mirrors;
+    GLuint g_mirrorTex{0};
+    GLuint g_mirrorProgram{0};
+    int g_mirrorTexW{0};
+    int g_mirrorTexH{0};
+
+    void MirrorAddSurface(ANativeWindow* window, int w, int h)
+    {
+        EGLDisplay display = eglGetCurrentDisplay();
+        EGLContext mainCtx = eglGetCurrentContext();
+        if (display == EGL_NO_DISPLAY || mainCtx == EGL_NO_CONTEXT)
+        {
+            return;
+        }
+        const EGLint cfgAttrs[] = {
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
+            EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE };
+        EGLConfig cfg{}; EGLint n = 0;
+        eglChooseConfig(display, cfgAttrs, &cfg, 1, &n);
+        EGLSurface sfc = eglCreateWindowSurface(display, cfg, window, nullptr);
+        const EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+        EGLContext ctx = eglCreateContext(display, cfg, mainCtx, ctxAttrs);
+        g_mirrors.push_back({window, sfc, ctx, w, h, 0});
+    }
+
+    void MirrorRemoveSurface(ANativeWindow* window)
+    {
+        EGLDisplay display = eglGetCurrentDisplay();
+        EGLSurface mainDraw = eglGetCurrentSurface(EGL_DRAW);
+        EGLSurface mainRead = eglGetCurrentSurface(EGL_READ);
+        EGLContext mainCtx = eglGetCurrentContext();
+        for (auto it = g_mirrors.begin(); it != g_mirrors.end(); ++it)
+        {
+            if (it->window != window) { continue; }
+            if (it->vao != 0)
+            {
+                eglMakeCurrent(display, it->surface, it->surface, it->context);
+                glDeleteVertexArrays(1, &it->vao);
+                eglMakeCurrent(display, mainDraw, mainRead, mainCtx);
+            }
+            eglDestroySurface(display, it->surface);
+            eglDestroyContext(display, it->context);
+            ANativeWindow_release(it->window);
+            g_mirrors.erase(it);
+            break;
+        }
+    }
+
+    void MirrorFrame()
+    {
+        if (g_mirrors.empty()) { return; }
+        EGLDisplay display = eglGetCurrentDisplay();
+        EGLSurface mainDraw = eglGetCurrentSurface(EGL_DRAW);
+        EGLSurface mainRead = eglGetCurrentSurface(EGL_READ);
+        EGLContext mainCtx = eglGetCurrentContext();
+        GLint vp[4] = {0,0,0,0};
+        glGetIntegerv(GL_VIEWPORT, vp);
+        const int srcW = vp[2], srcH = vp[3];
+        if (srcW <= 0 || srcH <= 0) { return; }
+
+        if (g_mirrorProgram == 0)
+        {
+            const char* vs = "#version 300 es\nout vec2 v;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);v=p;gl_Position=vec4(p*2.0-1.0,0,1);}";
+            const char* fs = "#version 300 es\nprecision mediump float;in vec2 v;uniform sampler2D t;out vec4 c;void main(){c=texture(t,v);}";
+            GLuint vsh=glCreateShader(GL_VERTEX_SHADER); glShaderSource(vsh,1,&vs,0); glCompileShader(vsh);
+            GLuint fsh=glCreateShader(GL_FRAGMENT_SHADER); glShaderSource(fsh,1,&fs,0); glCompileShader(fsh);
+            g_mirrorProgram=glCreateProgram(); glAttachShader(g_mirrorProgram,vsh); glAttachShader(g_mirrorProgram,fsh); glLinkProgram(g_mirrorProgram);
+            glGenTextures(1,&g_mirrorTex);
+        }
+        if (srcW!=g_mirrorTexW || srcH!=g_mirrorTexH)
+        {
+            glBindTexture(GL_TEXTURE_2D,g_mirrorTex);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,srcW,srcH,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            g_mirrorTexW=srcW; g_mirrorTexH=srcH;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER,0);
+        glBindTexture(GL_TEXTURE_2D,g_mirrorTex);
+        glCopyTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,0,0,srcW,srcH,0);
+        for (auto& m : g_mirrors)
+        {
+            eglMakeCurrent(display, m.surface, m.surface, m.context);
+            if (m.vao==0) glGenVertexArrays(1,&m.vao);
+            glBindVertexArray(m.vao);
+            glViewport(0,0,m.width,m.height);
+            glClearColor(0,0,0,0); glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(g_mirrorProgram);
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,g_mirrorTex);
+            glUniform1i(glGetUniformLocation(g_mirrorProgram,"t"),0);
+            glDrawArrays(GL_TRIANGLES,0,3);
+            eglSwapBuffers(display, m.surface);
+        }
+        eglMakeCurrent(display, mainDraw, mainRead, mainCtx);
+    }
 
     int LogPriorityFor(LogLevel level)
     {
@@ -509,6 +623,53 @@ JNIEXPORT void JNICALL
 Java_com_babylonjs_embedding_BabylonNative_viewDetach(JNIEnv*, jclass, jlong handle)
 {
     delete AsView(handle);
+}
+
+// Register a secondary surface mirrored from the main backbuffer. Retains the
+// ANativeWindow until removed.
+JNIEXPORT void JNICALL
+Java_com_babylonjs_embedding_BabylonNative_runtimeAddSecondarySurface(
+    JNIEnv* env, jclass, jlong, jobject surface)
+{
+    if (surface == nullptr)
+    {
+        return;
+    }
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+    if (window == nullptr)
+    {
+        return;
+    }
+    const int32_t w = ANativeWindow_getWidth(window);
+    const int32_t h = ANativeWindow_getHeight(window);
+    MirrorAddSurface(window, w > 0 ? w : 1, h > 0 ? h : 1);
+}
+
+// Detach a secondary surface and destroy its EGL context.
+JNIEXPORT void JNICALL
+Java_com_babylonjs_embedding_BabylonNative_runtimeRemoveSecondarySurface(
+    JNIEnv* env, jclass, jlong, jobject surface)
+{
+    if (surface == nullptr)
+    {
+        return;
+    }
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+    if (window == nullptr)
+    {
+        return;
+    }
+    MirrorRemoveSurface(window);
+    // Release the lookup ref; MirrorRemoveSurface released the retained one.
+    ANativeWindow_release(window);
+}
+
+// Mirror the main backbuffer onto secondary surfaces. Call once per frame on
+// the render thread, right after viewRenderFrame.
+JNIEXPORT void JNICALL
+Java_com_babylonjs_embedding_BabylonNative_runtimeMirrorFrame(JNIEnv*, jclass, jlong)
+{
+    MirrorFrame();
 }
 
 JNIEXPORT void JNICALL

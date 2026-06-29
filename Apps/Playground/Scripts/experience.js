@@ -50,6 +50,7 @@ function CreateSpheresAsync(scene) {
 
 const engine = new BABYLON.NativeEngine();
 const scene = new BABYLON.Scene(engine);
+scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
 
 CreateBoxAsync(scene).then(function () {
 //CreateSpheresAsync(scene).then(function () {
