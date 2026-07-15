@@ -61,19 +61,18 @@ adb shell am start -n "$ACTIVITY" \
 # All adb calls in the poll loop are wrapped in `timeout` so a wedged emulator
 # (adb "device offline" that never recovers) can never block the loop — a
 # previous iteration hung indefinitely in `adb wait-for-device`, so the overall
-# deadline never fired and the job ran until the hard 60-min timeout with zero
+# deadline never fired and the job ran until the hard job timeout with zero
 # diagnostics.
 ADB() { timeout 60 adb "$@"; }
-get_summary() { ADB logcat -d -s BabylonNative 2>/dev/null | grep -m1 'Run complete\.' || true; }
-# Per-test progress: the runner logs "Test 'X' validated" / "Test 'X' failed".
-count_done() { ADB logcat -d -s BabylonNative 2>/dev/null | grep -cE "Test '.*' (validated|failed)" 2>/dev/null || echo 0; }
-last_line()  { ADB logcat -d -s BabylonNative 2>/dev/null | tail -1 || true; }
 
 # Poll logcat for the runner's summary line. The app does not self-terminate on
-# Android, so completion is detected from the log. A heartbeat prints progress
-# every iteration so the CI console shows how far the suite got; a stall
-# watchdog (no new BabylonNative log line for STALL_LIMIT seconds) catches both
-# a crashed app (logs stop) and a wedged emulator without blocking.
+# Android, so completion is detected from the log. Each iteration takes a SINGLE
+# logcat snapshot (rather than three separate dumps) to minimise adb pressure on
+# an already-struggling emulator, then derives the summary, the completed-test
+# count, and the last line from it. A heartbeat prints progress so the CI
+# console shows how far the suite got; a stall watchdog (no new BabylonNative
+# log line for STALL_LIMIT seconds) catches both a crashed app (logs stop) and a
+# wedged emulator without blocking.
 DEADLINE=$(( $(date +%s) + 4200 ))   # 70 min overall budget
 STALL_LIMIT=600                      # 10 min with no new log => hung/crashed
 START=$(date +%s)
@@ -81,11 +80,13 @@ STALL_SINCE=$START
 LAST_SEEN=""
 SUMMARY=""
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-  SUMMARY=$(get_summary)
+  SNAP=$(ADB logcat -d -s BabylonNative 2>/dev/null || true)
+  SUMMARY=$(printf '%s\n' "$SNAP" | grep -m1 'Run complete\.' || true)
   [ -n "$SUMMARY" ] && break
   NOW=$(date +%s)
-  DONE=$(count_done)
-  CUR=$(last_line)
+  # Per-test progress: the runner logs "Test 'X' validated" / "Test 'X' failed".
+  DONE=$(printf '%s\n' "$SNAP" | grep -cE "Test '.*' (validated|failed)" || true)
+  CUR=$(printf '%s\n' "$SNAP" | grep . | tail -1)
   if [ -n "$CUR" ] && [ "$CUR" != "$LAST_SEEN" ]; then
     LAST_SEEN="$CUR"
     STALL_SINCE=$NOW
@@ -95,7 +96,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   echo "[heartbeat] t=$(( NOW - START ))s done=$DONE stalled=${STALLED}s last: $(printf '%s' "${CUR##*BabylonNative: }" | cut -c1-140)"
   if [ "$STALLED" -ge "$STALL_LIMIT" ]; then
     # One last chance for a summary that landed between polls.
-    SUMMARY=$(get_summary)
+    SUMMARY=$(ADB logcat -d -s BabylonNative 2>/dev/null | grep -m1 'Run complete\.' || true)
     [ -n "$SUMMARY" ] && break
     echo "No BabylonNative log progress for ${STALLED}s (last completed test count=$DONE) — emulator/app appears hung or crashed." >&2
     ADB logcat -d -s BabylonNative 2>/dev/null | tail -60 || true
