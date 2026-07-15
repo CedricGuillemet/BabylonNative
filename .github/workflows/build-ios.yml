@@ -14,6 +14,18 @@ on:
         required: false
         type: string
         default: macos-latest
+      sdk:
+        required: false
+        type: string
+        default: iphoneos
+      configuration:
+        required: false
+        type: string
+        default: Release
+      upload-visualization-artifact:
+        required: false
+        type: boolean
+        default: false
 
 # Absorb transient npm registry / CDN flakes during `npm install` in Apps/CMakeLists.txt.
 # npm's default fetch-retries is 2; bump to 5 (npm's own exponential backoff handles spacing).
@@ -44,6 +56,58 @@ jobs:
           xcodebuild \
             -project build/iOS/BabylonNative.xcodeproj \
             -scheme Playground \
-            -sdk iphoneos \
-            -configuration Release \
+            -sdk ${{ inputs.sdk }} \
+            -configuration ${{ inputs.configuration }} \
+            EXCLUDED_ARCHS=x86_64 \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Package visualization test artifact
+        if: ${{ inputs.upload-visualization-artifact }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the exact built product from xcodebuild rather than guessing
+          # with `find` (the CMake tree also contains unprocessed bundle
+          # skeletons whose Info.plist still has a literal
+          # $(PRODUCT_BUNDLE_IDENTIFIER), which the simulator rejects on install).
+          xcodebuild \
+            -project build/iOS/BabylonNative.xcodeproj \
+            -scheme Playground \
+            -sdk ${{ inputs.sdk }} \
+            -configuration ${{ inputs.configuration }} \
+            -showBuildSettings -json > ios-build-settings.json 2>/dev/null
+
+          app=$(python3 -c "
+          import json
+          data = json.load(open('ios-build-settings.json'))
+          for entry in data:
+              bs = entry.get('buildSettings', {})
+              if bs.get('FULL_PRODUCT_NAME') == 'Playground.app':
+                  print(bs['TARGET_BUILD_DIR'] + '/' + bs['FULL_PRODUCT_NAME'])
+                  break
+          ")
+
+          if [ -z "$app" ] || [ ! -d "$app" ]; then
+            echo "Could not resolve built Playground.app (got '$app')" >&2
+            exit 1
+          fi
+
+          # Fail early if the Info.plist wasn't processed (would install-fail).
+          bundle_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app/Info.plist")
+          echo "Packaging $app (CFBundleIdentifier=$bundle_id)"
+          case "$bundle_id" in
+            com.BabylonNative.Playground.*) ;;
+            *) echo "Unexpected/unprocessed bundle id: $bundle_id" >&2; exit 1 ;;
+          esac
+
+          # tar preserves the bundle's executable bits and symlinks, which a
+          # raw upload-artifact zip would strip and break the .app.
+          tar -czf playground-ios-visualization-tests.tar.gz -C "$(dirname "$app")" Playground.app
+
+      - name: Upload visualization test artifact
+        if: ${{ inputs.upload-visualization-artifact }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-visualization-tests
+          path: playground-ios-visualization-tests.tar.gz
+          if-no-files-found: error

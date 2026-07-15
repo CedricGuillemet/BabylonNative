@@ -75,6 +75,37 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     }
 
     /**
+     * Pins the primary render surface so the bgfx backbuffer ends up at a
+     * fixed <em>logical</em> size, independent of the on-screen view bounds.
+     * The validation suite needs the framebuffer readback to match its
+     * reference images, which are authored at an exact logical size (the same
+     * size the macOS/iOS hosts drive through {@code TestUtils.updateSize}).
+     *
+     * <p>Babylon Native renders in logical (density-independent) units: the
+     * Embedding layer's {@code View::Resize} divides the surface's physical
+     * pixel dimensions by the device-pixel-ratio before sizing the backbuffer.
+     * To land on a logical {@code width x height} we therefore pin the surface
+     * buffer to {@code width*density x height*density} physical pixels. A width
+     * or height &lt;= 0 restores the default match-the-view behavior.
+     *
+     * @param width  desired logical render width  (density-independent pixels)
+     * @param height desired logical render height (density-independent pixels)
+     */
+    public void setFixedSurfaceSize(int width, int height) {
+        SurfaceHolder holder = this.primarySurfaceView.getHolder();
+        if (width > 0 && height > 0) {
+            float density = getResources().getDisplayMetrics().density;
+            int physicalWidth = Math.round(width * density);
+            int physicalHeight = Math.round(height * density);
+            android.util.Log.i("BabylonNative", "setFixedSurfaceSize logical(" + width + "," + height +
+                    ") density=" + density + " -> physical(" + physicalWidth + "," + physicalHeight + ")");
+            holder.setFixedSize(physicalWidth, physicalHeight);
+        } else {
+            holder.setSizeFromLayout();
+        }
+    }
+
+    /**
      * This method is part of the SurfaceHolder.Callback interface, and is
      * not normally called or subclassed by clients of BabylonView.
      */
