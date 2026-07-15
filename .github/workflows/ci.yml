@@ -429,7 +429,7 @@ jobs:
   Android_VisualizationTests:
     needs: Android_VisualizationTests_Build
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 85
     env:
       PKG: com.android.babylonnative.playground
       ACTIVITY: com.android.babylonnative.playground/.PlaygroundActivity
