@@ -203,7 +203,7 @@ jobs:
   # ── Visualization Tests (custom / self-hosted agents only) ────
   MacOS_VisualizationTests:
     needs: MacOS
-    runs-on: self-hosted
+    runs-on: [self-hosted, macos, metal-vm]
     timeout-minutes: 60
     steps:
       - name: Download visualization test artifact
