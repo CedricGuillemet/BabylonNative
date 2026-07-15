@@ -460,7 +460,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           script: |
-            set -uo pipefail
+            set -u
 
             # Collect logcat + result/diff PNGs into ./android-results regardless
             # of how the run ends (crash, timeout, or pixel failures) so the
