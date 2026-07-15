@@ -54,19 +54,34 @@ adb shell am start -n "$ACTIVITY" \
 
 # Poll logcat for the runner's summary line. The app does not self-terminate
 # on Android, so we detect completion from the log.
+#
+# Crash detection must tolerate transient "device offline" hiccups: under
+# sustained swiftshader load the emulator's adb connection briefly drops, and
+# a single failed `pidof` does NOT mean the app died (it may be busy rendering
+# — the suite runs for minutes). Only treat the app as crashed after several
+# consecutive misses, each re-confirming the device is reachable first.
+adb wait-for-device 2>/dev/null || true
 DEADLINE=$(( $(date +%s) + 2400 ))
 SUMMARY=""
+MISSES=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null | grep -m1 'Run complete\.' || true)
   [ -n "$SUMMARY" ] && break
-  # Bail early if the app process vanished before writing a summary.
-  if ! adb shell pidof "$PKG" >/dev/null 2>&1; then
-    sleep 5
-    SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null | grep -m1 'Run complete\.' || true)
-    [ -n "$SUMMARY" ] && break
-    echo "App process exited before writing a run summary — likely a crash." >&2
-    adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
-    exit 3
+  # Re-confirm the device is online before trusting a pidof result, so a
+  # transient adb drop isn't mistaken for an app crash.
+  adb wait-for-device 2>/dev/null || true
+  if adb shell pidof "$PKG" >/dev/null 2>&1; then
+    MISSES=0
+  else
+    MISSES=$(( MISSES + 1 ))
+    if [ "$MISSES" -ge 3 ]; then
+      # Give a late-arriving summary one more chance before declaring a crash.
+      SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null | grep -m1 'Run complete\.' || true)
+      [ -n "$SUMMARY" ] && break
+      echo "App process not running after $MISSES consecutive checks — likely a crash." >&2
+      adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
+      exit 3
+    fi
   fi
   sleep 10
 done
