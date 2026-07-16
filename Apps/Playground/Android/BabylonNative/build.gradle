@@ -62,10 +62,6 @@ android {
         ndk {
             if (project.hasProperty("ARM64Only")) {
                 abiFilters "arm64-v8a"
-            } else if (project.hasProperty("X64Only")) {
-                // x86_64-only build for the GitHub-hosted (KVM-accelerated)
-                // emulator used by the Android visualization-test job.
-                abiFilters "x86_64"
             } else {
                 abiFilters "arm64-v8a", "armeabi-v7a", "x86"
             }

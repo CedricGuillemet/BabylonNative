@@ -401,8 +401,8 @@ jobs:
           if-no-files-found: ignore
 
   # ── Android visualization build (GitHub-hosted) ───────────────
-  # Builds the Playground APK (V8, x86_64) on a GitHub-hosted runner and
-  # publishes it as an artifact consumed by Android_VisualizationTests below.
+  # Builds the Playground APK (V8) on a GitHub-hosted runner and publishes it
+  # as an artifact consumed by Android_VisualizationTests on a custom agent.
   # The APK bundles Scripts/config.json + ReferenceImages (see the copyFiles
   # task in Apps/Playground/Android/app/build.gradle), so the emulator run is
   # fully self-contained.
@@ -412,61 +412,133 @@ jobs:
       runs-on: ubuntu-latest
       js-engine: V8
       upload-visualization-artifact: true
-      # Build for x86_64 so the APK runs on the GitHub-hosted, KVM-accelerated
-      # emulator below (arm64 can't be HW-accelerated on x86_64 CI hosts).
-      visualization-x86-64: true
 
-  # ── Android visualization tests (GitHub-hosted emulator) ──────────
-  # Runs the Playground pixel-diff suite on a KVM-accelerated x86_64
-  # Android emulator on a GitHub-hosted ubuntu runner (no self-hosted
-  # agent / physical GPU needed). The x86_64 APK is built by
-  # Android_VisualizationTests_Build (visualization-x86-64: true).
-  # Pass/fail is derived from the runner's "Run complete. ... failed=N"
-  # logcat line (Android's TestUtils.exit() is a no-op, so detection is
-  # via logcat rather than an exit code). Rendering uses swiftshader
-  # (software) since GitHub runners have no GPU; the reference images'
-  # per-test tolerances absorb the swiftshader-vs-GPU differences.
+  # ── Android visualization Tests (custom / self-hosted agents only) ─
+  # Installs the APK built above onto an Android emulator, launches the
+  # Playground pixel-diff suite via an Intent, and derives pass/fail from the
+  # runner's "Run complete. ... failed=N" logcat line (Android's
+  # TestUtils.exit() is a no-op, so detection is via logcat rather than an
+  # exit code).
   Android_VisualizationTests:
     needs: Android_VisualizationTests_Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 85
+    runs-on: self-hosted
+    timeout-minutes: 60
     env:
       PKG: com.android.babylonnative.playground
       ACTIVITY: com.android.babylonnative.playground/.PlaygroundActivity
-      API_LEVEL: '33'
     steps:
-      # Checkout is needed so the emulator run script file is on disk; the
-      # reactivecircus action runs its `script` input line-by-line, so the
-      # multi-line runner logic lives in .github/scripts/android-vt-run.sh.
-      - uses: actions/checkout@v5
-
       - name: Download visualization test artifact
         uses: actions/download-artifact@v6
         with:
           name: android-visualization-tests
 
-      # Grant the runner user access to /dev/kvm so the emulator boots with
-      # hardware acceleration (reactivecircus/android-emulator-runner otherwise
-      # falls back to an unusably slow software CPU).
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
       - name: Run visualization tests on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: ${{ env.API_LEVEL }}
-          target: google_apis
-          arch: x86_64
-          cores: 4
-          ram-size: 4096M
-          force-avd-creation: true
-          disable-animations: true
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
-          script: bash ./.github/scripts/android-vt-run.sh
+        run: |
+          set -euo pipefail
+
+          # Resolve the Android SDK and put its tools on PATH (self-hosted
+          # agents expose the SDK via ANDROID_SDK_ROOT / ANDROID_HOME).
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+          export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
+          export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"
+
+          adb start-server
+
+          # Reuse an already-booted device/emulator if the agent has one;
+          # otherwise boot the first available AVD headless.
+          if ! adb get-state >/dev/null 2>&1; then
+            avd=$(emulator -list-avds | head -1)
+            if [ -z "$avd" ]; then
+              echo "No Android device connected and no AVD available on this agent" >&2
+              exit 1
+            fi
+            echo "Booting emulator AVD: $avd"
+            nohup emulator -avd "$avd" -no-window -no-audio -no-boot-anim -gpu host \
+              > "${RUNNER_TEMP:-/tmp}/emulator.log" 2>&1 &
+          fi
+
+          adb wait-for-device
+          echo "Waiting for boot to complete..."
+          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            sleep 3
+          done
+          adb shell input keyevent 82 >/dev/null 2>&1 || true
+
+          # Start clean: force-stop any prior instance and clear the log buffer
+          # so a stale "Run complete" line can't be mistaken for this run.
+          adb shell am force-stop "$PKG" || true
+          adb logcat -c || true
+
+          # Uninstall any pre-existing copy first. A build from a different
+          # runner is signed with a different debug key, so `adb install -r`
+          # over it fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE. Removing it
+          # also clears the app's cache dir so a stale Result/sentinel can't
+          # leak into this run.
+          adb uninstall "$PKG" >/dev/null 2>&1 || true
+
+          APK="$GITHUB_WORKSPACE/playground-android-visualization-tests.apk"
+          echo "Installing $APK"
+          adb install -g "$APK"
+
+          # Launch the suite. renderWidth/renderHeight are LOGICAL units; the
+          # app scales them by display density so the backbuffer matches the
+          # 600x400 references. continueOnFailure lets the whole suite run
+          # instead of aborting at the first failure.
+          adb shell am start -n "$ACTIVITY" \
+            --es scripts "app:///Scripts/validation_native.js" \
+            --ei renderWidth 600 --ei renderHeight 400 \
+            --ez continueOnFailure true
+
+          # Poll logcat for the runner's summary line. The app does not
+          # self-terminate on Android, so we detect completion from the log.
+          DEADLINE=$(( $(date +%s) + 2400 ))
+          SUMMARY=""
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null \
+              | grep -m1 'Run complete\.' || true)
+            [ -n "$SUMMARY" ] && break
+            # Bail early if the app process vanished before writing a summary.
+            if ! adb shell pidof "$PKG" >/dev/null 2>&1; then
+              sleep 5
+              SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null \
+                | grep -m1 'Run complete\.' || true)
+              [ -n "$SUMMARY" ] && break
+              echo "App process exited before writing a run summary — likely a crash." >&2
+              adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
+              exit 3
+            fi
+            sleep 10
+          done
+
+          if [ -z "$SUMMARY" ]; then
+            echo "Timed out waiting for the validation suite to finish." >&2
+            adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
+            exit 1
+          fi
+
+          echo "$SUMMARY"
+          failed=$(echo "$SUMMARY" | sed -n 's/.*failed=\([0-9]*\).*/\1/p')
+          echo "Parsed failed=$failed"
+          [ "${failed:-1}" = "0" ]
+
+      - name: Collect visualization test results
+        if: always()
+        run: |
+          set -eu
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+          export PATH="$SDK/platform-tools:$PATH"
+
+          mkdir -p android-results
+          # Full logcat (all tags) and a BabylonNative-only view for the artifact.
+          adb logcat -d > android-results/logcat-full.txt 2>/dev/null || true
+          adb logcat -d -s BabylonNative > android-results/logcat-babylonnative.txt 2>/dev/null || true
+
+          # Result/diff PNGs live in the app's private cache; root the emulator
+          # (best effort — works on google_apis AVDs) to pull them.
+          adb root >/dev/null 2>&1 || true
+          adb wait-for-device >/dev/null 2>&1 || true
+          adb pull "/data/data/$PKG/cache/Results" android-results/ 2>/dev/null || true
+          adb pull "/data/data/$PKG/cache/Errors" android-results/ 2>/dev/null || true
 
       - name: Print Android logcat
         if: always()

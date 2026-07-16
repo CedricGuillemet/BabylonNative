@@ -13,13 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-      # When true, build the visualization-test APK for x86_64 only (instead of
-      # the default arm64-v8a). Used so the Android VT job can run on a
-      # GitHub-hosted, KVM-accelerated x86_64 emulator.
-      visualization-x86-64:
-        required: false
-        type: boolean
-        default: false
 
 env:
   NDK_VERSION: '28.2.13676358'
@@ -68,7 +61,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease \
             -PjsEngine=${{ inputs.js-engine }} \
-            ${{ inputs.visualization-x86-64 && '-PX64Only' || '-PARM64Only' }} \
+            -PARM64Only \
             -PNDK_VERSION=${{ env.NDK_VERSION }} \
             -PSANITIZERS=OFF
 
