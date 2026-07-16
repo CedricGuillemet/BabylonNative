@@ -445,8 +445,16 @@ jobs:
           adb start-server
 
           # Reuse an already-booted device/emulator if the agent has one;
-          # otherwise boot the first available AVD headless.
-          if ! adb get-state >/dev/null 2>&1; then
+          # otherwise boot the first available AVD headless. Detection is via
+          # `adb devices` (not `adb get-state`, which errors out when more than
+          # one device is attached) so a pre-existing emulator is reused
+          # instead of spawning a second one.
+          pick_ready() { adb devices | awk '$2=="device"{print $1; exit}'; }
+
+          SERIAL="$(pick_ready)"
+          if [ -n "$SERIAL" ]; then
+            echo "Reusing already-booted device: $SERIAL"
+          else
             avd=$(emulator -list-avds | head -1)
             if [ -z "$avd" ]; then
               echo "No Android device connected and no AVD available on this agent" >&2
@@ -455,10 +463,24 @@ jobs:
             echo "Booting emulator AVD: $avd"
             nohup emulator -avd "$avd" -no-window -no-audio -no-boot-anim -gpu host \
               > "${RUNNER_TEMP:-/tmp}/emulator.log" 2>&1 &
+            echo "Waiting for the emulator to come online..."
+            for _ in $(seq 1 100); do
+              SERIAL="$(pick_ready)"
+              [ -n "$SERIAL" ] && break
+              sleep 3
+            done
+            if [ -z "$SERIAL" ]; then
+              echo "Emulator did not come online in time" >&2
+              exit 1
+            fi
           fi
 
-          adb wait-for-device
-          echo "Waiting for boot to complete..."
+          # Pin every subsequent adb call (this step and later steps) to the
+          # chosen device so nothing fails with "more than one device/emulator".
+          export ANDROID_SERIAL="$SERIAL"
+          echo "ANDROID_SERIAL=$SERIAL" >> "$GITHUB_ENV"
+
+          echo "Waiting for boot to complete on $ANDROID_SERIAL..."
           until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
             sleep 3
           done
