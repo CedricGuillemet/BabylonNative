@@ -117,6 +117,18 @@ tasks.register('copyFiles') {
             include "*.js"
             into 'src/main/assets/Scripts'
         }
+        // Validation suite needs the test catalog and reference images to run
+        // (loaded via app:///Scripts/config.json and app:///ReferenceImages/).
+        copy {
+            from '../../Scripts'
+            include "config.json"
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../ReferenceImages'
+            include "*.png"
+            into 'src/main/assets/ReferenceImages'
+        }
     }
 }
 

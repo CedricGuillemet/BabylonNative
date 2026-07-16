@@ -7,6 +7,14 @@ class ViewController: UIViewController {
     var xrView: MTKView!
     var bnView: BNView?
 
+    /// Script paths passed as launch arguments (validation runner, etc.).
+    /// A non-empty result puts the app in validation mode: the render surface
+    /// is frame-driven so `TestUtils.updateSize()` can size it to the
+    /// reference-image dimensions.
+    static func testScriptArguments() -> [String] {
+        return ProcessInfo.processInfo.arguments.dropFirst().filter { $0.hasSuffix(".js") }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         guard
@@ -57,11 +65,24 @@ class ViewController: UIViewController {
     }
 
     func setupViews() {
+        let validationMode = !ViewController.testScriptArguments().isEmpty
+
         mtkView = MTKView()
-        mtkView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(mtkView)
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
+        if validationMode {
+            // Frame-driven sizing so TestUtils.updateSize() can resize the
+            // render surface to the reference-image dimensions. Start at the
+            // full view bounds (non-zero) so engine init can begin before the
+            // first updateSize() call; updateSize() then shrinks it to the
+            // authored test resolution.
+            mtkView.translatesAutoresizingMaskIntoConstraints = true
+            mtkView.autoresizingMask = []
+            mtkView.frame = view.bounds
+        } else {
+            mtkView.translatesAutoresizingMaskIntoConstraints = false
+            view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
+            view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
+        }
 
         xrView = MTKView()
         xrView.translatesAutoresizingMaskIntoConstraints = false

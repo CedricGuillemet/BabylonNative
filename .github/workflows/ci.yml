@@ -13,6 +13,7 @@ jobs:
     with:
       xcode-version: "26.4"
       runs-on: macos-26
+      upload-visualization-artifact: true
 
   MacOS_Ninja:
     uses: ./.github/workflows/build-macos.yml
@@ -198,3 +199,536 @@ jobs:
 
   Win32_Installation:
     uses: ./.github/workflows/test-install-win32.yml
+
+  # ── Visualization Tests (custom / self-hosted agents only) ────
+  MacOS_VisualizationTests:
+    needs: MacOS
+    runs-on: [self-hosted, macos, metal-vm]
+    timeout-minutes: 60
+    steps:
+      - name: Download visualization test artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-visualization-tests
+
+      - name: Extract Playground.app
+        run: tar -xzf playground-macos-visualization-tests.tar.gz
+
+      - name: Run visualization tests
+        run: ./Playground.app/Contents/MacOS/Playground app:///Scripts/validation_native.js
+
+      - name: Upload visualization test results
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-visualization-test-results
+          path: |
+            Results
+            Errors
+          if-no-files-found: ignore
+
+  # ── iOS visualization build (GitHub-hosted) ───────────────────
+  # Builds the Playground app for the iOS Simulator and publishes it as an
+  # artifact consumed by iOS_VisualizationTests on a custom agent.
+  iOS_VisualizationTests_Build:
+    uses: ./.github/workflows/build-ios.yml
+    with:
+      sdk: iphonesimulator
+      configuration: Release
+      deployment-target: "17.0"
+      xcode-version: "26.4"
+      runs-on: macos-26
+      upload-visualization-artifact: true
+
+  # ── iOS visualization Tests (custom / self-hosted agents only) ─
+  # Boots a simulator, installs the app built above, runs the Playground
+  # pixel-diff validation suite, and returns status from the exit-code sentinel
+  # the app writes to its Documents container.
+  iOS_VisualizationTests:
+    needs: iOS_VisualizationTests_Build
+    runs-on: [self-hosted, ios-vm]
+    timeout-minutes: 60
+    env:
+      BUNDLE_ID: com.BabylonNative.Playground.iOS
+    steps:
+      - name: Download visualization test artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ios-visualization-tests
+
+      - name: Extract Playground.app
+        run: |
+          set -euo pipefail
+          # Extract into a dedicated, cleaned directory so a leftover bundle
+          # from a previous run (or another job sharing this self-hosted
+          # workspace) can't collide with this run's app.
+          rm -rf ios-app
+          mkdir -p ios-app
+          tar -xzf playground-ios-visualization-tests.tar.gz -C ios-app
+          ls -la ios-app/Playground.app
+          bundle_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" ios-app/Playground.app/Info.plist)
+          echo "Extracted CFBundleIdentifier=$bundle_id"
+          if [ "$bundle_id" != "$BUNDLE_ID" ]; then
+            echo "Bundle id mismatch (expected $BUNDLE_ID)" >&2
+            exit 1
+          fi
+
+      - name: Run visualization tests on simulator
+        run: |
+          set -euo pipefail
+
+          APP="$GITHUB_WORKSPACE/ios-app/Playground.app"
+
+          # Pick the first available iPhone simulator.
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          devices = json.load(sys.stdin)['devices']
+          for runtime, devs in devices.items():
+              if 'iOS' in runtime:
+                  for dev in devs:
+                      if dev.get('isAvailable') and 'iPhone' in dev.get('name', ''):
+                          print(dev['udid']); sys.exit(0)
+          sys.exit('No available iPhone simulator found')
+          ")
+          echo "Using simulator $UDID"
+          # Expose UDID to later steps (crash-log collection).
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
+
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+          # Clear any state from a previous run so a stale sentinel can't be
+          # mistaken for this run's result.
+          xcrun simctl uninstall "$UDID" "$BUNDLE_ID" || true
+          xcrun simctl install "$UDID" "$APP"
+
+          # Stream the app's logs for visibility during the run.
+          xcrun simctl spawn "$UDID" log stream --level debug \
+            --predicate 'processImagePath CONTAINS "Playground"' &
+          LOG_PID=$!
+          trap 'kill $LOG_PID 2>/dev/null || true' EXIT
+
+          # Timestamp used later to find crash reports produced by THIS launch.
+          date +%s > "$GITHUB_WORKSPACE/launch_epoch.txt"
+
+          # Launch the app. Simulator apps run as real host processes, so the
+          # PID that `simctl launch` prints is a host PID we can poll with
+          # `kill -0` to detect a crash (abnormal exit before writing the
+          # sentinel). The app writes its exit code to a sentinel file just
+          # before a normal termination (the simulator does not surface the
+          # process exit code to `simctl launch`).
+          #
+          # Disable Metal API/shader validation in the child app
+          # (SIMCTL_CHILD_* env vars are forwarded to the launched process).
+          # Under simctl the validation layer is active and turns bgfx's
+          # pipeline vertex-descriptor mismatches into fatal aborts
+          # (SIGABRT in -[MTLVertexDescriptorInternal validateWithVertexFunction])
+          # on the simulator's Metal; disabling it lets the whole suite run.
+          LAUNCH_OUT=$(SIMCTL_CHILD_MTL_DEBUG_LAYER=0 \
+            SIMCTL_CHILD_METAL_DEVICE_WRAPPER_TYPE=0 \
+            SIMCTL_CHILD_MTL_SHADER_VALIDATION=0 \
+            xcrun simctl launch "$UDID" "$BUNDLE_ID" app:///Scripts/validation_native.js)
+          echo "$LAUNCH_OUT"
+          APP_PID=$(echo "$LAUNCH_OUT" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+          echo "App PID: $APP_PID"
+
+          CONTAINER=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data)
+          CODE_FILE="$CONTAINER/Documents/validation_exit_code.txt"
+
+          # Poll until the sentinel appears (normal completion) or the app
+          # process disappears without one (crash). Bailing on process death
+          # avoids waiting out the whole timeout after a crash.
+          while true; do
+            if [ -f "$CODE_FILE" ]; then
+              break
+            fi
+            if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+              # Give the sentinel a brief grace period in case the write is
+              # still flushing as the process exits.
+              sleep 3
+              [ -f "$CODE_FILE" ] && break
+              echo "App process $APP_PID exited without writing the exit-code sentinel — likely a crash." >&2
+              exit 3
+            fi
+            sleep 5
+          done
+
+          CODE=$(tr -d '[:space:]' < "$CODE_FILE")
+          echo "Validation exit code: $CODE"
+          [ "$CODE" = "0" ]
+
+      - name: Collect crash reports and simulator logs
+        if: always()
+        run: |
+          set -eu
+          mkdir -p ios-results
+          UDID="${SIM_UDID:-booted}"
+
+          # App crash reports (.ips) land on the host Mac. Grab any Playground
+          # report newer than this run's launch so we don't ship stale ones.
+          since=0
+          [ -f "$GITHUB_WORKSPACE/launch_epoch.txt" ] && since=$(cat "$GITHUB_WORKSPACE/launch_epoch.txt")
+          for report in "$HOME"/Library/Logs/DiagnosticReports/Playground-*.ips; do
+            [ -e "$report" ] || continue
+            # mtime in epoch seconds; keep reports at/after launch.
+            mtime=$(stat -f %m "$report")
+            if [ "$mtime" -ge "$since" ]; then
+              echo "Collecting crash report: $report"
+              cp "$report" ios-results/ || true
+            fi
+          done
+
+          # Simulator system log for the chosen device (best effort).
+          syslog="$HOME/Library/Logs/CoreSimulator/$UDID/system.log"
+          [ -f "$syslog" ] && cp "$syslog" ios-results/simulator-system.log || true
+
+      - name: Collect visualization test results
+        if: always()
+        run: |
+          set -eu
+          CONTAINER=$(xcrun simctl get_app_container "${SIM_UDID:-booted}" "$BUNDLE_ID" data 2>/dev/null || true)
+          if [ -n "${CONTAINER:-}" ] && [ -d "$CONTAINER/Documents" ]; then
+            mkdir -p ios-results
+            cp -R "$CONTAINER/Documents/." ios-results/ 2>/dev/null || true
+          fi
+
+      - name: Upload visualization test results
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-visualization-test-results
+          path: ios-results
+          if-no-files-found: ignore
+
+  # ── Android visualization build (GitHub-hosted) ───────────────
+  # Builds the Playground APK (V8) on a GitHub-hosted runner and publishes it
+  # as an artifact consumed by Android_VisualizationTests on a custom agent.
+  # The APK bundles Scripts/config.json + ReferenceImages (see the copyFiles
+  # task in Apps/Playground/Android/app/build.gradle), so the emulator run is
+  # fully self-contained.
+  Android_VisualizationTests_Build:
+    uses: ./.github/workflows/build-android.yml
+    with:
+      runs-on: ubuntu-latest
+      js-engine: V8
+      upload-visualization-artifact: true
+
+  # ── Android visualization Tests (custom / self-hosted agents only) ─
+  # Installs the APK built above onto an Android emulator, launches the
+  # Playground pixel-diff suite via an Intent, and derives pass/fail from the
+  # runner's "Run complete. ... failed=N" logcat line (Android's
+  # TestUtils.exit() is a no-op, so detection is via logcat rather than an
+  # exit code).
+  Android_VisualizationTests:
+    needs: Android_VisualizationTests_Build
+    runs-on: [self-hosted, android-host]
+    timeout-minutes: 60
+    env:
+      PKG: com.android.babylonnative.playground
+      ACTIVITY: com.android.babylonnative.playground/.PlaygroundActivity
+    steps:
+      - name: Download visualization test artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: android-visualization-tests
+
+      - name: Run visualization tests on emulator
+        run: |
+          set -euo pipefail
+
+          # Resolve the Android SDK and put its tools on PATH (self-hosted
+          # agents expose the SDK via ANDROID_SDK_ROOT / ANDROID_HOME).
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+          export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
+          export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"
+
+          adb start-server
+
+          # Reuse an already-booted device/emulator if the agent has one;
+          # otherwise boot the first available AVD headless. Detection is via
+          # `adb devices` (not `adb get-state`, which errors out when more than
+          # one device is attached) so a pre-existing emulator is reused
+          # instead of spawning a second one.
+          pick_ready() { adb devices | awk '$2=="device"{print $1; exit}'; }
+
+          SERIAL="$(pick_ready)"
+          if [ -n "$SERIAL" ]; then
+            echo "Reusing already-booted device: $SERIAL"
+          else
+            avd=$(emulator -list-avds | head -1)
+            if [ -z "$avd" ]; then
+              echo "No Android device connected and no AVD available on this agent" >&2
+              exit 1
+            fi
+            echo "Booting emulator AVD: $avd"
+            nohup emulator -avd "$avd" -no-window -no-audio -no-boot-anim -gpu host \
+              > "${RUNNER_TEMP:-/tmp}/emulator.log" 2>&1 &
+            echo "Waiting for the emulator to come online..."
+            for _ in $(seq 1 100); do
+              SERIAL="$(pick_ready)"
+              [ -n "$SERIAL" ] && break
+              sleep 3
+            done
+            if [ -z "$SERIAL" ]; then
+              echo "Emulator did not come online in time" >&2
+              exit 1
+            fi
+          fi
+
+          # Pin every subsequent adb call (this step and later steps) to the
+          # chosen device so nothing fails with "more than one device/emulator".
+          export ANDROID_SERIAL="$SERIAL"
+          echo "ANDROID_SERIAL=$SERIAL" >> "$GITHUB_ENV"
+
+          echo "Waiting for boot to complete on $ANDROID_SERIAL..."
+          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            sleep 3
+          done
+          adb shell input keyevent 82 >/dev/null 2>&1 || true
+
+          # Start clean: force-stop any prior instance and clear the log buffer
+          # so a stale "Run complete" line can't be mistaken for this run.
+          adb shell am force-stop "$PKG" || true
+          adb logcat -c || true
+
+          # Uninstall any pre-existing copy first. A build from a different
+          # runner is signed with a different debug key, so `adb install -r`
+          # over it fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE. Removing it
+          # also clears the app's cache dir so a stale Result/sentinel can't
+          # leak into this run.
+          adb uninstall "$PKG" >/dev/null 2>&1 || true
+
+          APK="$GITHUB_WORKSPACE/playground-android-visualization-tests.apk"
+          echo "Installing $APK"
+          adb install -g "$APK"
+
+          # Launch the suite. renderWidth/renderHeight are LOGICAL units; the
+          # app scales them by display density so the backbuffer matches the
+          # 600x400 references. continueOnFailure lets the whole suite run
+          # instead of aborting at the first failure.
+          adb shell am start -n "$ACTIVITY" \
+            --es scripts "app:///Scripts/validation_native.js" \
+            --ei renderWidth 600 --ei renderHeight 400 \
+            --ez continueOnFailure true
+
+          # Poll logcat for the runner's summary line. The app does not
+          # self-terminate on Android, so we detect completion from the log.
+          DEADLINE=$(( $(date +%s) + 2400 ))
+          SUMMARY=""
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null \
+              | grep -m1 'Run complete\.' || true)
+            [ -n "$SUMMARY" ] && break
+            # Bail early if the app process vanished before writing a summary.
+            if ! adb shell pidof "$PKG" >/dev/null 2>&1; then
+              sleep 5
+              SUMMARY=$(adb logcat -d -s BabylonNative 2>/dev/null \
+                | grep -m1 'Run complete\.' || true)
+              [ -n "$SUMMARY" ] && break
+              echo "App process exited before writing a run summary — likely a crash." >&2
+              adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
+              exit 3
+            fi
+            sleep 10
+          done
+
+          if [ -z "$SUMMARY" ]; then
+            echo "Timed out waiting for the validation suite to finish." >&2
+            adb logcat -d -s BabylonNative 2>/dev/null | tail -50 || true
+            exit 1
+          fi
+
+          echo "$SUMMARY"
+          failed=$(echo "$SUMMARY" | sed -n 's/.*failed=\([0-9]*\).*/\1/p')
+          echo "Parsed failed=$failed"
+          [ "${failed:-1}" = "0" ]
+
+      - name: Collect visualization test results
+        if: always()
+        run: |
+          set -eu
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+          export PATH="$SDK/platform-tools:$PATH"
+
+          mkdir -p android-results
+          # Full logcat (all tags) and a BabylonNative-only view for the artifact.
+          adb logcat -d > android-results/logcat-full.txt 2>/dev/null || true
+          adb logcat -d -s BabylonNative > android-results/logcat-babylonnative.txt 2>/dev/null || true
+
+          # Result/diff PNGs live in the app's private cache; root the emulator
+          # (best effort — works on google_apis AVDs) to pull them.
+          adb root >/dev/null 2>&1 || true
+          adb wait-for-device >/dev/null 2>&1 || true
+          adb pull "/data/data/$PKG/cache/Results" android-results/ 2>/dev/null || true
+          adb pull "/data/data/$PKG/cache/Errors" android-results/ 2>/dev/null || true
+
+      - name: Print Android logcat
+        if: always()
+        run: |
+          echo "::group::Android logcat (BabylonNative)"
+          cat android-results/logcat-babylonnative.txt 2>/dev/null || echo "(no BabylonNative logcat captured)"
+          echo "::endgroup::"
+
+      - name: Upload visualization test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: android-visualization-test-results
+          path: android-results
+          if-no-files-found: ignore
+
+# ══════════════════════════════════════════════════════════════════
+# All non-macOS CI has been temporarily disabled. Uncomment to restore.
+# ══════════════════════════════════════════════════════════════════
+#
+#   MacOS_Ninja:
+#     uses: ./.github/workflows/build-macos.yml
+#     with:
+#       generator: "Ninja Multi-Config"
+#       xcode-version: "26.4"
+#       runs-on: macos-26
+#
+#   MacOS_Sanitizers:
+#     uses: ./.github/workflows/build-macos.yml
+#     with:
+#       enable-sanitizers: true
+#       xcode-version: "26.4"
+#       runs-on: macos-26
+#
+#   # ── Apple: Xcode 26 ──────────────────────────────────────────
+#   MacOS_Xcode26:
+#     uses: ./.github/workflows/build-macos.yml
+#     with:
+#       xcode-version: "26.4"
+#       runs-on: macos-26
+#
+#   iOS_Xcode26:
+#     uses: ./.github/workflows/build-ios.yml
+#     with:
+#       deployment-target: "26.0"
+#       xcode-version: "26.4"
+#       runs-on: macos-26
+#
+#   # ── Win32─────────────────────────────────────────────────────
+#   Win32_x64_D3D11:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#
+#   Win32_x64_JSI_D3D11:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#       napi-type: jsi
+#
+#   Win32_x64_V8_D3D11:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#       napi-type: V8
+#
+#   Win32_x64_Hermes_D3D11:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#       napi-type: Hermes
+#
+#   Win32_x64_D3D11_Sanitizers:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#       enable-sanitizers: true
+#
+#   Win32_x64_D3D12:
+#     uses: ./.github/workflows/build-win32.yml
+#     with:
+#       platform: x64
+#       graphics-api: D3D12
+#
+#   Win32_x64_D3D11_PrecompiledShaderTest:
+#     uses: ./.github/workflows/build-win32-shader.yml
+#
+#   # ── UWP ───────────────────────────────────────────────────────
+#   UWP_x64:
+#     uses: ./.github/workflows/build-uwp.yml
+#     with:
+#       platform: x64
+#
+#   UWP_arm64:
+#     uses: ./.github/workflows/build-uwp.yml
+#     with:
+#       platform: arm64
+#
+#   UWP_arm64_JSI:
+#     uses: ./.github/workflows/build-uwp.yml
+#     with:
+#       platform: arm64
+#       napi-type: jsi
+#
+#   # ── Ubuntu / Linux ────────────────────────────────────────────
+#   Ubuntu_Clang_JSC:
+#     uses: ./.github/workflows/build-linux.yml
+#     with:
+#       cc: clang
+#       cxx: clang++
+#       js-engine: JavaScriptCore
+#
+#   Ubuntu_Clang_Hermes:
+#     uses: ./.github/workflows/build-linux.yml
+#     with:
+#       cc: clang
+#       cxx: clang++
+#       js-engine: Hermes
+#
+#   Ubuntu_GCC_JSC:
+#     uses: ./.github/workflows/build-linux.yml
+#     with:
+#       cc: gcc
+#       cxx: g++
+#       js-engine: JavaScriptCore
+#
+#   # ── Android ───────────────────────────────────────────────────
+#   Android_Ubuntu_JSC:
+#     uses: ./.github/workflows/build-android.yml
+#     with:
+#       runs-on: ubuntu-latest
+#       js-engine: JavaScriptCore
+#
+#   Android_Ubuntu_V8:
+#     uses: ./.github/workflows/build-android.yml
+#     with:
+#       runs-on: ubuntu-latest
+#       js-engine: V8
+#
+#   Android_Ubuntu_Hermes:
+#     uses: ./.github/workflows/build-android.yml
+#     with:
+#       runs-on: ubuntu-latest
+#       js-engine: Hermes
+#
+#   Android_MacOS_JSC:
+#     uses: ./.github/workflows/build-android.yml
+#     with:
+#       runs-on: macos-26
+#       js-engine: JavaScriptCore
+#
+#   Android_MacOS_V8:
+#     uses: ./.github/workflows/build-android.yml
+#     with:
+#       runs-on: macos-26
+#       js-engine: V8
+#
+#   # ── Installation Tests ────────────────────────────────────────
+#   iOS_Installation:
+#     uses: ./.github/workflows/test-install-ios.yml
+#     with:
+#       deployment-target: "17.2"
+#
+#   Linux_Installation:
+#     uses: ./.github/workflows/test-install-linux.yml
+#
+#   MacOS_Installation:
+#     uses: ./.github/workflows/test-install-macos.yml
+#
+#   Win32_Installation:
+#     uses: ./.github/workflows/test-install-win32.yml

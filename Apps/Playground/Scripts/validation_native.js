@@ -19,6 +19,21 @@
     // Frames after the trigger to let RenderDoc finalize the .rdc.
     const POST_CAPTURE_FRAMES = 5;
 
+    // Optional host override: render at least this many frames before the
+    // framebuffer readback/comparison for every test. Hosts whose GPU needs
+    // extra frames to settle (e.g. the iOS Simulator's paravirtual Metal GPU)
+    // set globalThis.__validationMinRenderCount; defaults to 0 (no effect) so
+    // every other host keeps each test's configured renderCount.
+    const minRenderCount = (typeof globalThis.__validationMinRenderCount === "number")
+        ? (globalThis.__validationMinRenderCount | 0)
+        : 0;
+    // When set, keep running the whole suite even when a test fails instead of
+    // exiting on the first failure. The process still exits non-zero at the end
+    // if any test failed. Hosts set globalThis.__validationContinueOnFailure.
+    const continueOnFailure = (typeof globalThis.__validationContinueOnFailure === "boolean")
+        ? globalThis.__validationContinueOnFailure
+        : false;
+
     function shouldRunTest(test, index) {
         if (testIndices.length > 0 && testIndices.indexOf(index) === -1) {
             return false;
@@ -244,8 +259,8 @@
         currentScene.useConstantAnimationDeltaTime = true;
         // Frame at which to read back the framebuffer & validate. This is the
         // test's renderCount (default 1) and determines pass/fail. NOT shifted
-        // by --capture.
-        const compareFrame = test.renderCount || 1;
+        // by --capture. A host may raise the floor via __validationMinRenderCount.
+        const compareFrame = Math.max(test.renderCount || 1, minRenderCount);
         // Frame at which to call TestUtils.captureNextFrame(), or 0 if no
         // capture is requested. CLI --capture=N takes precedence over the
         // per-test "capture" config flag; the legacy per-test flag triggers
@@ -292,8 +307,24 @@
             if (currentScene.activeCamera && currentScene.activeCamera.useAutoRotationBehavior) {
                 currentScene.activeCamera.useAutoRotationBehavior = false;
             }
+            // Optional warm-up: render a number of throwaway frames before the
+            // counted frames begin. These do NOT advance frameIndex, so the
+            // captured/compared frame is unchanged and animated multi-frame
+            // tests are unaffected. Hosts that need to prime the swapchain
+            // (e.g. the iOS Simulator, whose paravirtual Metal GPU can hand
+            // back an empty drawable on the very first present) set
+            // globalThis.__validationWarmupFrames; it defaults to 0 elsewhere.
+            let warmupRemaining = (typeof globalThis.__validationWarmupFrames === "number")
+                ? globalThis.__validationWarmupFrames
+                : 0;
             engine.runRenderLoop(function () {
                 try {
+                    if (warmupRemaining > 0) {
+                        warmupRemaining--;
+                        currentScene.render();
+                        return;
+                    }
+
                     frameIndex++;
 
                     if (captureFrame > 0 && frameIndex === captureFrame && TestUtils.captureNextFrame) {
@@ -652,18 +683,25 @@
                     ranCount++;
                     if (!status) {
                         failedCount++;
-                        // failTest() already triggered the debugger before
-                        // reaching this callback; no second `debugger` here.
-                        logRunSummary();
-                        TestUtils.exit(-1);
-                        return;
+                        console.log("TEST RESULT: FAIL - " + currentTitle);
+                        if (!continueOnFailure) {
+                            // failTest() already triggered the debugger before
+                            // reaching this callback; no second `debugger` here.
+                            logRunSummary();
+                            TestUtils.exit(-1);
+                            return;
+                        }
+                    } else {
+                        passedCount++;
+                        console.log("TEST RESULT: PASS - " + currentTitle);
                     }
-                    passedCount++;
                     i++;
                     if (justOnce || i >= config.tests.length) {
                         logRunSummary();
                         engine.dispose();
-                        TestUtils.exit(0);
+                        // Non-zero exit if anything failed, even in
+                        // continue-on-failure mode.
+                        TestUtils.exit(failedCount > 0 ? -1 : 0);
                         return;
                     }
                     // Defer next iteration to avoid blowing Chakra's

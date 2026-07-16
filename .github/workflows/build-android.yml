@@ -9,6 +9,10 @@ on:
       js-engine:
         required: true
         type: string
+      upload-visualization-artifact:
+        required: false
+        type: boolean
+        default: false
 
 env:
   NDK_VERSION: '28.2.13676358'
@@ -39,6 +43,18 @@ jobs:
             brew install ninja
           fi
 
+      - name: Install Playground npm dependencies (babylon.js assets)
+        if: ${{ inputs.upload-visualization-artifact }}
+        working-directory: Apps
+        run: |
+          # The gradle copyFiles task bundles babylon.js from Apps/node_modules
+          # into the APK's assets. That task runs during preBuild, BEFORE the
+          # app's native CMake build (which is what normally runs `npm install`),
+          # so on a clean checkout node_modules doesn't exist yet and the
+          # babylon.js bundles are silently omitted -> "BABYLON is not defined"
+          # at runtime. Install them up front so the assets are present.
+          npm install
+
       - name: Build Playground ${{ inputs.js-engine }}
         working-directory: Apps/Playground/Android
         run: |
@@ -48,3 +64,41 @@ jobs:
             -PARM64Only \
             -PNDK_VERSION=${{ env.NDK_VERSION }} \
             -PSANITIZERS=OFF
+
+      - name: Package visualization test artifact
+        if: ${{ inputs.upload-visualization-artifact }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the built release APK. assembleRelease writes it to the
+          # app module's outputs directory; glob rather than hard-code the name
+          # so a signing-config change (e.g. *-unsigned.apk) doesn't break this.
+          apk=$(find Apps/Playground/Android/app/build/outputs/apk/release \
+            -maxdepth 1 -name '*.apk' | head -1)
+          if [ -z "$apk" ] || [ ! -f "$apk" ]; then
+            echo "Could not locate built Playground APK" >&2
+            exit 1
+          fi
+          echo "Packaging $apk"
+          cp "$apk" playground-android-visualization-tests.apk
+
+          # Fail early if the validation assets (bundled by app/build.gradle's
+          # copyFiles task) are missing from the APK — the self-hosted test job
+          # loads app:///Scripts/validation_native.js and its config.json from
+          # inside the APK, so a build without them would run zero tests.
+          # babylon.max.js in particular must be present or the suite throws
+          # "BABYLON is not defined" immediately (see the npm install step).
+          if command -v unzip >/dev/null 2>&1; then
+            for asset in assets/Scripts/config.json assets/Scripts/babylon.max.js; do
+              unzip -l playground-android-visualization-tests.apk | grep -q "$asset" \
+                || { echo "APK missing bundled validation asset ($asset)" >&2; exit 1; }
+            done
+          fi
+
+      - name: Upload visualization test artifact
+        if: ${{ inputs.upload-visualization-artifact }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: android-visualization-tests
+          path: playground-android-visualization-tests.apk
+          if-no-files-found: error
