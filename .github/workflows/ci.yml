@@ -246,7 +246,7 @@ jobs:
   # the app writes to its Documents container.
   iOS_VisualizationTests:
     needs: iOS_VisualizationTests_Build
-    runs-on: self-hosted
+    runs-on: [self-hosted, ios-vm]
     timeout-minutes: 60
     env:
       BUNDLE_ID: com.BabylonNative.Playground.iOS
