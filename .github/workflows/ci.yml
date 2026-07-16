@@ -421,7 +421,7 @@ jobs:
   # exit code).
   Android_VisualizationTests:
     needs: Android_VisualizationTests_Build
-    runs-on: self-hosted
+    runs-on: [self-hosted, android-host]
     timeout-minutes: 60
     env:
       PKG: com.android.babylonnative.playground
