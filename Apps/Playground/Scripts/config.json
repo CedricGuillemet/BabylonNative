@@ -640,15 +640,15 @@
             "playgroundId": "#QA2662#13",
             "renderCount": 15,
             "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "reason": "Crashes or hangs on legacy NativeEngine; passes on WebGPU/Dawn in isolation but fails with a 73.478% pixel diff after earlier splat tests in the normal 100-199 chunk",
             "referenceImage": "gsplat-sogs-sh.png"
         },
         {
             "title": "Gaussian Splatting Part Test",
             "playgroundId": "#BTS11N#0",
             "renderCount": 15,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "gsplat-part-test.png"
         },
         {
@@ -1247,23 +1247,23 @@
         {
             "title": "Draco Mesh Compression (decodeMeshAsync, numWorkers = 1)",
             "playgroundId": "#22MFU2#77",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "draco.png"
         },
         {
             "title": "Draco Mesh Compression (decodeMeshToGeometryAsync, numWorkers = 0)",
             "playgroundId": "#22MFU2#78",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "draco.png"
         },
         {
             "title": "Draco Mesh Compression (decodeMeshToGeometryAsync, numWorkers = 1)",
             "playgroundId": "#22MFU2#78",
             "replace": "numWorkers = 0, numWorkers = 1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "draco.png"
         },
         {
@@ -1271,21 +1271,21 @@
             "playgroundId": "#22MFU2#75",
             "replace": "numWorkers = 0, numWorkers = 1",
             "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "reason": "Crashes or hangs on legacy NativeEngine; passes on WebGPU/Dawn in isolation but aborts after the preceding Draco tests in the normal 200-299 chunk",
             "referenceImage": "draco.png"
         },
         {
             "title": "Draco Decoder",
             "playgroundId": "#22MFU2#82",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "draco.png"
         },
         {
             "title": "Draco Decoder/Encoder roundtrip",
             "playgroundId": "#JNW207#4",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; crashes or hangs on legacy NativeEngine",
             "referenceImage": "dracoRoundtrip.png"
         },
         {
@@ -1342,8 +1342,8 @@
         {
             "title": "GLTF Serializer KHR draco mesh compression",
             "playgroundId": "#F8BF8N#3",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Draco loader passes 'utf8' label; BN TextDecoder only accepts 'utf-8' (WHATWG label normalization not implemented)",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; legacy NativeEngine TextDecoder rejects the Draco loader's 'utf8' label (only 'utf-8' is accepted)",
             "referenceImage": "glTFSerializerKhrDracoMeshCompression.png"
         },
         {
@@ -1446,8 +1446,8 @@
         {
             "title": "GLTF Buggy with Draco Mesh Compression",
             "playgroundId": "#JNW207#1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 (heap corruption)",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; legacy Win32 NativeEngine crashes with heap corruption",
             "referenceImage": "gltfBuggyDraco.png"
         },
         {
@@ -3119,15 +3119,15 @@
         {
             "title": "Sponza Clustered Lighting",
             "playgroundId": "#CSCJO2#17",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; pixel comparison fails on legacy NativeEngine",
             "referenceImage": "sponza-clustered-lighting.png"
         },
         {
             "title": "Sponza Clustered Lighting (2 viewports)",
             "playgroundId": "#CSCJO2#20",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn; pixel comparison fails on legacy NativeEngine",
             "referenceImage": "sponza-clustered-lighting-viewports.png"
         },
         {
@@ -3138,71 +3138,71 @@
         {
             "title": "Sponza Clustered Lighting (node material std)",
             "playgroundId": "#QY98Z3#16",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Sponza-Clustered-Lighting-node-material-std-.png"
         },
         {
             "title": "Sponza Clustered Lighting (node material pbr)",
             "playgroundId": "#QY98Z3#17",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Sponza-Clustered-Lighting-node-material-pbr-.png"
         },
         {
             "title": "Clustered Lighting (lhs std material)",
             "playgroundId": "#CSCJO2#59",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-lhs-std-material-.png"
         },
         {
             "title": "Clustered Lighting (lhs pbr material)",
             "playgroundId": "#CSCJO2#60",
             "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "reason": "Chakra cannot parse the modern JS syntax; passes on WebGPU/Dawn in isolation but fails with an 84.552% pixel diff after earlier tests in the normal 400-499 chunk",
             "referenceImage": "Clustered-Lighting-lhs-pbr-material-.png"
         },
         {
             "title": "Clustered Lighting (lhs std nodematerial)",
             "playgroundId": "#CSCJO2#64",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-lhs-std-nodematerial-.png"
         },
         {
             "title": "Clustered Lighting (lhs pbr nodematerial)",
             "playgroundId": "#CSCJO2#62",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-lhs-pbr-nodematerial-.png"
         },
         {
             "title": "Clustered Lighting (rhs std material)",
             "playgroundId": "#CSCJO2#69",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-rhs-std-material-.png"
         },
         {
             "title": "Clustered Lighting (rhs pbr material)",
             "playgroundId": "#CSCJO2#70",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-rhs-pbr-material-.png"
         },
         {
             "title": "Clustered Lighting (rhs std nodematerial)",
             "playgroundId": "#CSCJO2#71",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-rhs-std-nodematerial-.png"
         },
         {
             "title": "Clustered Lighting (rhs pbr nodematerial)",
             "playgroundId": "#CSCJO2#72",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Chakra parse failure on modern JS syntax",
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "Passes on WebGPU/Dawn with V8; Chakra cannot parse the modern JS syntax",
             "referenceImage": "Clustered-Lighting-rhs-pbr-nodematerial-.png"
         },
         {
