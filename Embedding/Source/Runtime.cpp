@@ -8,6 +8,12 @@
 #if BABYLON_NATIVE_PLUGIN_NATIVEDAWN
 #include <Babylon/Plugins/NativeDawn.h>
 #endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEDRACO
+#include <Babylon/Plugins/NativeDraco.h>
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT
+#include <Babylon/Plugins/NativeMeshopt.h>
+#endif
 #if BABYLON_NATIVE_PLUGIN_NATIVECAMERA
 #include <Babylon/Plugins/NativeCamera.h>
 #endif
@@ -313,6 +319,12 @@ namespace Babylon::Embedding
             // and the WebGPU globals, and (via its bootstrap) drives the scene on
             // a WebGPUEngine. `width`/`height` are the initial surface size.
             Babylon::Plugins::NativeDawn::Initialize(env, window, width, height);
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEDRACO
+            Babylon::Plugins::NativeDraco::Initialize(env);
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT
+            Babylon::Plugins::NativeMeshopt::Initialize(env);
 #endif
 #if BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS
             Babylon::Plugins::NativeOptimizations::Initialize(env);
