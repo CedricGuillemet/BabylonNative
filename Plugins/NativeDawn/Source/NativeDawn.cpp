@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -499,6 +500,13 @@ namespace Babylon::Plugins::NativeDawn
             if (!v.IsString()) return {};
             return v.As<Napi::String>().Utf8Value();
         }
+        // Same, but substitutes `def` when the property is absent, not a string,
+        // or empty -- so the caller reads the property exactly once.
+        std::string PropStrOr(Napi::Object o, const char* k, const char* def)
+        {
+            std::string s = PropStr(o, k);
+            return s.empty() ? std::string{def} : s;
+        }
         uint32_t PropU32(Napi::Object o, const char* k, uint32_t def)
         {
             if (!o.Has(k)) return def;
@@ -734,341 +742,363 @@ namespace Babylon::Plugins::NativeDawn
             return c;
         }
 
-        // ---- enum string -> wgpu mappings ------------------------------------
-        WGPUTextureFormat textureFormat(const std::string& s)
+        // ---- enum string <-> WebGPU value mapping ----------------------------
+        //
+        // WebGPU spells its enums as strings on the JS side. Each enum gets one
+        // table sorted by name so a lookup is a binary search over a const array
+        // rather than a chain of string compares, and the names live in one
+        // contiguous block of .rdata instead of being scattered across dozens of
+        // comparison sites. Sortedness is asserted at compile time, so a
+        // misplaced entry is a build error and not a silent lookup miss.
+        //
+        // The table and the search are deliberately untyped (int32_t, which every
+        // WGPU enum fits -- they are all 32-bit thanks to their _Force32 member).
+        // A template over the enum type would instantiate the whole binary search
+        // once per enum, which costs more code than the if-chains it replaces.
+        struct EnumMapping
         {
-            if (s == "r8unorm") return WGPUTextureFormat_R8Unorm;
-            if (s == "r8snorm") return WGPUTextureFormat_R8Snorm;
-            if (s == "r8uint") return WGPUTextureFormat_R8Uint;
-            if (s == "r8sint") return WGPUTextureFormat_R8Sint;
-            if (s == "r16uint") return WGPUTextureFormat_R16Uint;
-            if (s == "r16sint") return WGPUTextureFormat_R16Sint;
-            if (s == "r16float") return WGPUTextureFormat_R16Float;
-            if (s == "rg8unorm") return WGPUTextureFormat_RG8Unorm;
-            if (s == "rg8snorm") return WGPUTextureFormat_RG8Snorm;
-            if (s == "rg8uint") return WGPUTextureFormat_RG8Uint;
-            if (s == "rg8sint") return WGPUTextureFormat_RG8Sint;
-            if (s == "r32uint") return WGPUTextureFormat_R32Uint;
-            if (s == "r32sint") return WGPUTextureFormat_R32Sint;
-            if (s == "r32float") return WGPUTextureFormat_R32Float;
-            if (s == "rg16uint") return WGPUTextureFormat_RG16Uint;
-            if (s == "rg16sint") return WGPUTextureFormat_RG16Sint;
-            if (s == "rg16float") return WGPUTextureFormat_RG16Float;
-            if (s == "rgba8unorm") return WGPUTextureFormat_RGBA8Unorm;
-            if (s == "rgba8unorm-srgb") return WGPUTextureFormat_RGBA8UnormSrgb;
-            if (s == "rgba8snorm") return WGPUTextureFormat_RGBA8Snorm;
-            if (s == "rgba8uint") return WGPUTextureFormat_RGBA8Uint;
-            if (s == "rgba8sint") return WGPUTextureFormat_RGBA8Sint;
-            if (s == "bgra8unorm") return WGPUTextureFormat_BGRA8Unorm;
-            if (s == "bgra8unorm-srgb") return WGPUTextureFormat_BGRA8UnormSrgb;
-            if (s == "rgb9e5ufloat") return WGPUTextureFormat_RGB9E5Ufloat;
-            if (s == "rgb10a2uint") return WGPUTextureFormat_RGB10A2Uint;
-            if (s == "rgb10a2unorm") return WGPUTextureFormat_RGB10A2Unorm;
-            if (s == "rg11b10ufloat") return WGPUTextureFormat_RG11B10Ufloat;
-            if (s == "rg32uint") return WGPUTextureFormat_RG32Uint;
-            if (s == "rg32sint") return WGPUTextureFormat_RG32Sint;
-            if (s == "rg32float") return WGPUTextureFormat_RG32Float;
-            if (s == "rgba16uint") return WGPUTextureFormat_RGBA16Uint;
-            if (s == "rgba16sint") return WGPUTextureFormat_RGBA16Sint;
-            if (s == "rgba16float") return WGPUTextureFormat_RGBA16Float;
-            if (s == "rgba32uint") return WGPUTextureFormat_RGBA32Uint;
-            if (s == "rgba32sint") return WGPUTextureFormat_RGBA32Sint;
-            if (s == "rgba32float") return WGPUTextureFormat_RGBA32Float;
-            if (s == "stencil8") return WGPUTextureFormat_Stencil8;
-            if (s == "depth16unorm") return WGPUTextureFormat_Depth16Unorm;
-            if (s == "depth24plus") return WGPUTextureFormat_Depth24Plus;
-            if (s == "depth24plus-stencil8") return WGPUTextureFormat_Depth24PlusStencil8;
-            if (s == "depth32float") return WGPUTextureFormat_Depth32Float;
-            if (s == "depth32float-stencil8") return WGPUTextureFormat_Depth32FloatStencil8;
-            if (s == "bc1-rgba-unorm") return WGPUTextureFormat_BC1RGBAUnorm;
-            if (s == "bc1-rgba-unorm-srgb") return WGPUTextureFormat_BC1RGBAUnormSrgb;
-            if (s == "bc2-rgba-unorm") return WGPUTextureFormat_BC2RGBAUnorm;
-            if (s == "bc2-rgba-unorm-srgb") return WGPUTextureFormat_BC2RGBAUnormSrgb;
-            if (s == "bc3-rgba-unorm") return WGPUTextureFormat_BC3RGBAUnorm;
-            if (s == "bc3-rgba-unorm-srgb") return WGPUTextureFormat_BC3RGBAUnormSrgb;
-            if (s == "bc4-r-unorm") return WGPUTextureFormat_BC4RUnorm;
-            if (s == "bc4-r-snorm") return WGPUTextureFormat_BC4RSnorm;
-            if (s == "bc5-rg-unorm") return WGPUTextureFormat_BC5RGUnorm;
-            if (s == "bc5-rg-snorm") return WGPUTextureFormat_BC5RGSnorm;
-            if (s == "bc6h-rgb-ufloat") return WGPUTextureFormat_BC6HRGBUfloat;
-            if (s == "bc6h-rgb-float") return WGPUTextureFormat_BC6HRGBFloat;
-            if (s == "bc7-rgba-unorm") return WGPUTextureFormat_BC7RGBAUnorm;
-            if (s == "bc7-rgba-unorm-srgb") return WGPUTextureFormat_BC7RGBAUnormSrgb;
-            return WGPUTextureFormat_Undefined;
+            std::string_view name;
+            int32_t value;
+        };
+
+        constexpr bool IsSortedByName(const EnumMapping* table, size_t count)
+        {
+            for (size_t i = 1; i < count; ++i)
+            {
+                if (!(table[i - 1].name < table[i].name))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
+
+        int32_t LookupEnumValue(const EnumMapping* table, size_t count,
+            std::string_view name, int32_t fallback)
+        {
+            const EnumMapping* const last = table + count;
+            const EnumMapping* it = std::lower_bound(table, last, name,
+                [](const EnumMapping& e, std::string_view n) { return e.name < n; });
+            return (it != last && it->name == name) ? it->value : fallback;
+        }
+
+        // Defines `Enum fn(std::string_view)` backed by a sorted table.
+        // The table is passed as the trailing arguments so its internal commas
+        // survive macro expansion.
+#define NATIVEDAWN_ENUM_MAP(fn, Enum, fallback, ...)                           \
+    constexpr EnumMapping k##fn##Table[] = __VA_ARGS__;                        \
+    static_assert(IsSortedByName(k##fn##Table, std::size(k##fn##Table)),       \
+        #fn " mapping table must be sorted by name");                          \
+    static_assert(sizeof(Enum) == sizeof(int32_t), #fn " enum is not 32-bit"); \
+    Enum fn(std::string_view s)                                                \
+    {                                                                          \
+        return Enum(LookupEnumValue(k##fn##Table, std::size(k##fn##Table), s,  \
+            int32_t(fallback)));                                               \
+    }
+
+
+        NATIVEDAWN_ENUM_MAP(textureFormat, WGPUTextureFormat, WGPUTextureFormat_Undefined,
+        {
+            {"bc1-rgba-unorm",        WGPUTextureFormat_BC1RGBAUnorm},
+            {"bc1-rgba-unorm-srgb",   WGPUTextureFormat_BC1RGBAUnormSrgb},
+            {"bc2-rgba-unorm",        WGPUTextureFormat_BC2RGBAUnorm},
+            {"bc2-rgba-unorm-srgb",   WGPUTextureFormat_BC2RGBAUnormSrgb},
+            {"bc3-rgba-unorm",        WGPUTextureFormat_BC3RGBAUnorm},
+            {"bc3-rgba-unorm-srgb",   WGPUTextureFormat_BC3RGBAUnormSrgb},
+            {"bc4-r-snorm",           WGPUTextureFormat_BC4RSnorm},
+            {"bc4-r-unorm",           WGPUTextureFormat_BC4RUnorm},
+            {"bc5-rg-snorm",          WGPUTextureFormat_BC5RGSnorm},
+            {"bc5-rg-unorm",          WGPUTextureFormat_BC5RGUnorm},
+            {"bc6h-rgb-float",        WGPUTextureFormat_BC6HRGBFloat},
+            {"bc6h-rgb-ufloat",       WGPUTextureFormat_BC6HRGBUfloat},
+            {"bc7-rgba-unorm",        WGPUTextureFormat_BC7RGBAUnorm},
+            {"bc7-rgba-unorm-srgb",   WGPUTextureFormat_BC7RGBAUnormSrgb},
+            {"bgra8unorm",            WGPUTextureFormat_BGRA8Unorm},
+            {"bgra8unorm-srgb",       WGPUTextureFormat_BGRA8UnormSrgb},
+            {"depth16unorm",          WGPUTextureFormat_Depth16Unorm},
+            {"depth24plus",           WGPUTextureFormat_Depth24Plus},
+            {"depth24plus-stencil8",  WGPUTextureFormat_Depth24PlusStencil8},
+            {"depth32float",          WGPUTextureFormat_Depth32Float},
+            {"depth32float-stencil8", WGPUTextureFormat_Depth32FloatStencil8},
+            {"r16float",              WGPUTextureFormat_R16Float},
+            {"r16sint",               WGPUTextureFormat_R16Sint},
+            {"r16uint",               WGPUTextureFormat_R16Uint},
+            {"r32float",              WGPUTextureFormat_R32Float},
+            {"r32sint",               WGPUTextureFormat_R32Sint},
+            {"r32uint",               WGPUTextureFormat_R32Uint},
+            {"r8sint",                WGPUTextureFormat_R8Sint},
+            {"r8snorm",               WGPUTextureFormat_R8Snorm},
+            {"r8uint",                WGPUTextureFormat_R8Uint},
+            {"r8unorm",               WGPUTextureFormat_R8Unorm},
+            {"rg11b10ufloat",         WGPUTextureFormat_RG11B10Ufloat},
+            {"rg16float",             WGPUTextureFormat_RG16Float},
+            {"rg16sint",              WGPUTextureFormat_RG16Sint},
+            {"rg16uint",              WGPUTextureFormat_RG16Uint},
+            {"rg32float",             WGPUTextureFormat_RG32Float},
+            {"rg32sint",              WGPUTextureFormat_RG32Sint},
+            {"rg32uint",              WGPUTextureFormat_RG32Uint},
+            {"rg8sint",               WGPUTextureFormat_RG8Sint},
+            {"rg8snorm",              WGPUTextureFormat_RG8Snorm},
+            {"rg8uint",               WGPUTextureFormat_RG8Uint},
+            {"rg8unorm",              WGPUTextureFormat_RG8Unorm},
+            {"rgb10a2uint",           WGPUTextureFormat_RGB10A2Uint},
+            {"rgb10a2unorm",          WGPUTextureFormat_RGB10A2Unorm},
+            {"rgb9e5ufloat",          WGPUTextureFormat_RGB9E5Ufloat},
+            {"rgba16float",           WGPUTextureFormat_RGBA16Float},
+            {"rgba16sint",            WGPUTextureFormat_RGBA16Sint},
+            {"rgba16uint",            WGPUTextureFormat_RGBA16Uint},
+            {"rgba32float",           WGPUTextureFormat_RGBA32Float},
+            {"rgba32sint",            WGPUTextureFormat_RGBA32Sint},
+            {"rgba32uint",            WGPUTextureFormat_RGBA32Uint},
+            {"rgba8sint",             WGPUTextureFormat_RGBA8Sint},
+            {"rgba8snorm",            WGPUTextureFormat_RGBA8Snorm},
+            {"rgba8uint",             WGPUTextureFormat_RGBA8Uint},
+            {"rgba8unorm",            WGPUTextureFormat_RGBA8Unorm},
+            {"rgba8unorm-srgb",       WGPUTextureFormat_RGBA8UnormSrgb},
+            {"stencil8",              WGPUTextureFormat_Stencil8}
+        })
+
+        NATIVEDAWN_ENUM_MAP(vertexFormat, WGPUVertexFormat, WGPUVertexFormat_Float32,
+        {
+            {"float16x2", WGPUVertexFormat_Float16x2},
+            {"float16x4", WGPUVertexFormat_Float16x4},
+            {"float32",   WGPUVertexFormat_Float32},
+            {"float32x2", WGPUVertexFormat_Float32x2},
+            {"float32x3", WGPUVertexFormat_Float32x3},
+            {"float32x4", WGPUVertexFormat_Float32x4},
+            {"sint16x2",  WGPUVertexFormat_Sint16x2},
+            {"sint16x4",  WGPUVertexFormat_Sint16x4},
+            {"sint32",    WGPUVertexFormat_Sint32},
+            {"sint32x2",  WGPUVertexFormat_Sint32x2},
+            {"sint32x3",  WGPUVertexFormat_Sint32x3},
+            {"sint32x4",  WGPUVertexFormat_Sint32x4},
+            {"sint8x2",   WGPUVertexFormat_Sint8x2},
+            {"sint8x4",   WGPUVertexFormat_Sint8x4},
+            {"snorm16x2", WGPUVertexFormat_Snorm16x2},
+            {"snorm16x4", WGPUVertexFormat_Snorm16x4},
+            {"snorm8x2",  WGPUVertexFormat_Snorm8x2},
+            {"snorm8x4",  WGPUVertexFormat_Snorm8x4},
+            {"uint16x2",  WGPUVertexFormat_Uint16x2},
+            {"uint16x4",  WGPUVertexFormat_Uint16x4},
+            {"uint32",    WGPUVertexFormat_Uint32},
+            {"uint32x2",  WGPUVertexFormat_Uint32x2},
+            {"uint32x3",  WGPUVertexFormat_Uint32x3},
+            {"uint32x4",  WGPUVertexFormat_Uint32x4},
+            {"uint8x2",   WGPUVertexFormat_Uint8x2},
+            {"uint8x4",   WGPUVertexFormat_Uint8x4},
+            {"unorm16x2", WGPUVertexFormat_Unorm16x2},
+            {"unorm16x4", WGPUVertexFormat_Unorm16x4},
+            {"unorm8x2",  WGPUVertexFormat_Unorm8x2},
+            {"unorm8x4",  WGPUVertexFormat_Unorm8x4}
+        })
+
+        NATIVEDAWN_ENUM_MAP(indexFormat, WGPUIndexFormat, WGPUIndexFormat_Undefined,
+        {
+            {"uint16", WGPUIndexFormat_Uint16},
+            {"uint32", WGPUIndexFormat_Uint32}
+        })
+
+        NATIVEDAWN_ENUM_MAP(primitiveTopology, WGPUPrimitiveTopology, WGPUPrimitiveTopology_TriangleList,
+        {
+            {"line-list",      WGPUPrimitiveTopology_LineList},
+            {"line-strip",     WGPUPrimitiveTopology_LineStrip},
+            {"point-list",     WGPUPrimitiveTopology_PointList},
+            {"triangle-list",  WGPUPrimitiveTopology_TriangleList},
+            {"triangle-strip", WGPUPrimitiveTopology_TriangleStrip}
+        })
+
+        NATIVEDAWN_ENUM_MAP(cullMode, WGPUCullMode, WGPUCullMode_None,
+        {
+            {"back",  WGPUCullMode_Back},
+            {"front", WGPUCullMode_Front},
+            {"none",  WGPUCullMode_None}
+        })
+
+        NATIVEDAWN_ENUM_MAP(frontFace, WGPUFrontFace, WGPUFrontFace_CCW,
+        {
+            {"ccw", WGPUFrontFace_CCW},
+            {"cw",  WGPUFrontFace_CW}
+        })
+
+        NATIVEDAWN_ENUM_MAP(compareFunction, WGPUCompareFunction, WGPUCompareFunction_Undefined,
+        {
+            {"always",        WGPUCompareFunction_Always},
+            {"equal",         WGPUCompareFunction_Equal},
+            {"greater",       WGPUCompareFunction_Greater},
+            {"greater-equal", WGPUCompareFunction_GreaterEqual},
+            {"less",          WGPUCompareFunction_Less},
+            {"less-equal",    WGPUCompareFunction_LessEqual},
+            {"never",         WGPUCompareFunction_Never},
+            {"not-equal",     WGPUCompareFunction_NotEqual}
+        })
+
+        NATIVEDAWN_ENUM_MAP(stencilOperation, WGPUStencilOperation, WGPUStencilOperation_Keep,
+        {
+            {"decrement-clamp", WGPUStencilOperation_DecrementClamp},
+            {"decrement-wrap",  WGPUStencilOperation_DecrementWrap},
+            {"increment-clamp", WGPUStencilOperation_IncrementClamp},
+            {"increment-wrap",  WGPUStencilOperation_IncrementWrap},
+            {"invert",          WGPUStencilOperation_Invert},
+            {"keep",            WGPUStencilOperation_Keep},
+            {"replace",         WGPUStencilOperation_Replace},
+            {"zero",            WGPUStencilOperation_Zero}
+        })
+
+        NATIVEDAWN_ENUM_MAP(blendFactor, WGPUBlendFactor, WGPUBlendFactor_One,
+        {
+            {"constant",            WGPUBlendFactor_Constant},
+            {"dst",                 WGPUBlendFactor_Dst},
+            {"dst-alpha",           WGPUBlendFactor_DstAlpha},
+            {"one",                 WGPUBlendFactor_One},
+            {"one-minus-constant",  WGPUBlendFactor_OneMinusConstant},
+            {"one-minus-dst",       WGPUBlendFactor_OneMinusDst},
+            {"one-minus-dst-alpha", WGPUBlendFactor_OneMinusDstAlpha},
+            {"one-minus-src",       WGPUBlendFactor_OneMinusSrc},
+            {"one-minus-src-alpha", WGPUBlendFactor_OneMinusSrcAlpha},
+            {"src",                 WGPUBlendFactor_Src},
+            {"src-alpha",           WGPUBlendFactor_SrcAlpha},
+            {"src-alpha-saturated", WGPUBlendFactor_SrcAlphaSaturated},
+            {"zero",                WGPUBlendFactor_Zero}
+        })
+
+        NATIVEDAWN_ENUM_MAP(blendOperation, WGPUBlendOperation, WGPUBlendOperation_Add,
+        {
+            {"add",              WGPUBlendOperation_Add},
+            {"max",              WGPUBlendOperation_Max},
+            {"min",              WGPUBlendOperation_Min},
+            {"reverse-subtract", WGPUBlendOperation_ReverseSubtract},
+            {"subtract",         WGPUBlendOperation_Subtract}
+        })
+
+        NATIVEDAWN_ENUM_MAP(addressMode, WGPUAddressMode, WGPUAddressMode_ClampToEdge,
+        {
+            {"clamp-to-edge", WGPUAddressMode_ClampToEdge},
+            {"mirror-repeat", WGPUAddressMode_MirrorRepeat},
+            {"repeat",        WGPUAddressMode_Repeat}
+        })
+
+        NATIVEDAWN_ENUM_MAP(filterMode, WGPUFilterMode, WGPUFilterMode_Nearest,
+        {
+            {"linear",  WGPUFilterMode_Linear},
+            {"nearest", WGPUFilterMode_Nearest}
+        })
+
+        NATIVEDAWN_ENUM_MAP(mipmapFilterMode, WGPUMipmapFilterMode, WGPUMipmapFilterMode_Nearest,
+        {
+            {"linear",  WGPUMipmapFilterMode_Linear},
+            {"nearest", WGPUMipmapFilterMode_Nearest}
+        })
+
+        NATIVEDAWN_ENUM_MAP(textureViewDimension, WGPUTextureViewDimension, WGPUTextureViewDimension_Undefined,
+        {
+            {"1d",         WGPUTextureViewDimension_1D},
+            {"2d",         WGPUTextureViewDimension_2D},
+            {"2d-array",   WGPUTextureViewDimension_2DArray},
+            {"3d",         WGPUTextureViewDimension_3D},
+            {"cube",       WGPUTextureViewDimension_Cube},
+            {"cube-array", WGPUTextureViewDimension_CubeArray}
+        })
+
+        NATIVEDAWN_ENUM_MAP(textureDimension, WGPUTextureDimension, WGPUTextureDimension_2D,
+        {
+            {"1d", WGPUTextureDimension_1D},
+            {"2d", WGPUTextureDimension_2D},
+            {"3d", WGPUTextureDimension_3D}
+        })
+
+        NATIVEDAWN_ENUM_MAP(textureSampleType, WGPUTextureSampleType, WGPUTextureSampleType_Float,
+        {
+            {"depth",              WGPUTextureSampleType_Depth},
+            {"float",              WGPUTextureSampleType_Float},
+            {"sint",               WGPUTextureSampleType_Sint},
+            {"uint",               WGPUTextureSampleType_Uint},
+            {"unfilterable-float", WGPUTextureSampleType_UnfilterableFloat}
+        })
+
+        NATIVEDAWN_ENUM_MAP(storageTextureAccess, WGPUStorageTextureAccess, WGPUStorageTextureAccess_Undefined,
+        {
+            {"read-only",  WGPUStorageTextureAccess_ReadOnly},
+            {"read-write", WGPUStorageTextureAccess_ReadWrite},
+            {"write-only", WGPUStorageTextureAccess_WriteOnly}
+        })
+
+        NATIVEDAWN_ENUM_MAP(samplerBindingType, WGPUSamplerBindingType, WGPUSamplerBindingType_Filtering,
+        {
+            {"comparison",    WGPUSamplerBindingType_Comparison},
+            {"filtering",     WGPUSamplerBindingType_Filtering},
+            {"non-filtering", WGPUSamplerBindingType_NonFiltering}
+        })
+
+        NATIVEDAWN_ENUM_MAP(bufferBindingType, WGPUBufferBindingType, WGPUBufferBindingType_Uniform,
+        {
+            {"read-only-storage", WGPUBufferBindingType_ReadOnlyStorage},
+            {"storage",           WGPUBufferBindingType_Storage},
+            {"uniform",           WGPUBufferBindingType_Uniform}
+        })
+
+        NATIVEDAWN_ENUM_MAP(loadOp, WGPULoadOp, WGPULoadOp_Load,
+        {
+            {"clear", WGPULoadOp_Clear},
+            {"load",  WGPULoadOp_Load}
+        })
+
+        NATIVEDAWN_ENUM_MAP(storeOp, WGPUStoreOp, WGPUStoreOp_Store,
+        {
+            {"discard", WGPUStoreOp_Discard},
+            {"store",   WGPUStoreOp_Store}
+        })
+
+        NATIVEDAWN_ENUM_MAP(vertexStepMode, WGPUVertexStepMode, WGPUVertexStepMode_Vertex,
+        {
+            {"instance", WGPUVertexStepMode_Instance},
+            {"vertex",   WGPUVertexStepMode_Vertex}
+        })
+
+        NATIVEDAWN_ENUM_MAP(featureName, WGPUFeatureName, WGPUFeatureName(0),
+        {
+            {"bgra8unorm-storage",       WGPUFeatureName_BGRA8UnormStorage},
+            {"depth-clip-control",       WGPUFeatureName_DepthClipControl},
+            {"depth32float-stencil8",    WGPUFeatureName_Depth32FloatStencil8},
+            {"dual-source-blending",     WGPUFeatureName_DualSourceBlending},
+            {"float32-filterable",       WGPUFeatureName_Float32Filterable},
+            {"indirect-first-instance",  WGPUFeatureName_IndirectFirstInstance},
+            {"rg11b10ufloat-renderable", WGPUFeatureName_RG11B10UfloatRenderable},
+            {"shader-f16",               WGPUFeatureName_ShaderF16},
+            {"texture-compression-astc", WGPUFeatureName_TextureCompressionASTC},
+            {"texture-compression-bc",   WGPUFeatureName_TextureCompressionBC},
+            {"texture-compression-etc2", WGPUFeatureName_TextureCompressionETC2},
+            {"timestamp-query",          WGPUFeatureName_TimestampQuery}
+        })
+
+        NATIVEDAWN_ENUM_MAP(queryType, WGPUQueryType, WGPUQueryType_Occlusion,
+        {
+            {"occlusion", WGPUQueryType_Occlusion},
+            {"timestamp", WGPUQueryType_Timestamp}
+        })
+
+        NATIVEDAWN_ENUM_MAP(powerPreference, WGPUPowerPreference, WGPUPowerPreference_Undefined,
+        {
+            {"high-performance", WGPUPowerPreference_HighPerformance},
+            {"low-power",        WGPUPowerPreference_LowPower}
+        })
+
+
+#undef NATIVEDAWN_ENUM_MAP
+
+        // Reverse lookup. Rare (only when reporting a texture's format back to
+        // JS), so a linear scan over the forward table keeps one source of truth
+        // instead of duplicating 60+ names in a switch. Every table name is a
+        // string literal, so data() is NUL-terminated.
         const char* textureFormatStr(WGPUTextureFormat f)
         {
-            switch (f)
+            for (const auto& e : ktextureFormatTable)
             {
-            case WGPUTextureFormat_R8Unorm: return "r8unorm";
-            case WGPUTextureFormat_R8Snorm: return "r8snorm";
-            case WGPUTextureFormat_R8Uint: return "r8uint";
-            case WGPUTextureFormat_R8Sint: return "r8sint";
-            case WGPUTextureFormat_R16Uint: return "r16uint";
-            case WGPUTextureFormat_R16Sint: return "r16sint";
-            case WGPUTextureFormat_R16Float: return "r16float";
-            case WGPUTextureFormat_RG8Unorm: return "rg8unorm";
-            case WGPUTextureFormat_RG8Snorm: return "rg8snorm";
-            case WGPUTextureFormat_RG8Uint: return "rg8uint";
-            case WGPUTextureFormat_RG8Sint: return "rg8sint";
-            case WGPUTextureFormat_R32Uint: return "r32uint";
-            case WGPUTextureFormat_R32Sint: return "r32sint";
-            case WGPUTextureFormat_R32Float: return "r32float";
-            case WGPUTextureFormat_RG16Uint: return "rg16uint";
-            case WGPUTextureFormat_RG16Sint: return "rg16sint";
-            case WGPUTextureFormat_RG16Float: return "rg16float";
-            case WGPUTextureFormat_RGBA8Unorm: return "rgba8unorm";
-            case WGPUTextureFormat_RGBA8UnormSrgb: return "rgba8unorm-srgb";
-            case WGPUTextureFormat_RGBA8Snorm: return "rgba8snorm";
-            case WGPUTextureFormat_RGBA8Uint: return "rgba8uint";
-            case WGPUTextureFormat_RGBA8Sint: return "rgba8sint";
-            case WGPUTextureFormat_BGRA8Unorm: return "bgra8unorm";
-            case WGPUTextureFormat_BGRA8UnormSrgb: return "bgra8unorm-srgb";
-            case WGPUTextureFormat_RGB9E5Ufloat: return "rgb9e5ufloat";
-            case WGPUTextureFormat_RGB10A2Uint: return "rgb10a2uint";
-            case WGPUTextureFormat_RGB10A2Unorm: return "rgb10a2unorm";
-            case WGPUTextureFormat_RG11B10Ufloat: return "rg11b10ufloat";
-            case WGPUTextureFormat_RG32Uint: return "rg32uint";
-            case WGPUTextureFormat_RG32Sint: return "rg32sint";
-            case WGPUTextureFormat_RG32Float: return "rg32float";
-            case WGPUTextureFormat_RGBA16Uint: return "rgba16uint";
-            case WGPUTextureFormat_RGBA16Sint: return "rgba16sint";
-            case WGPUTextureFormat_RGBA16Float: return "rgba16float";
-            case WGPUTextureFormat_RGBA32Uint: return "rgba32uint";
-            case WGPUTextureFormat_RGBA32Sint: return "rgba32sint";
-            case WGPUTextureFormat_RGBA32Float: return "rgba32float";
-            case WGPUTextureFormat_Stencil8: return "stencil8";
-            case WGPUTextureFormat_Depth16Unorm: return "depth16unorm";
-            case WGPUTextureFormat_Depth24Plus: return "depth24plus";
-            case WGPUTextureFormat_Depth24PlusStencil8: return "depth24plus-stencil8";
-            case WGPUTextureFormat_Depth32Float: return "depth32float";
-            case WGPUTextureFormat_Depth32FloatStencil8: return "depth32float-stencil8";
-            default: return "bgra8unorm";
+                if (e.value == int32_t(f))
+                {
+                    return e.name.data();
+                }
             }
-        }
-        WGPUVertexFormat vertexFormat(const std::string& s)
-        {
-            if (s == "uint8x2") return WGPUVertexFormat_Uint8x2;
-            if (s == "uint8x4") return WGPUVertexFormat_Uint8x4;
-            if (s == "sint8x2") return WGPUVertexFormat_Sint8x2;
-            if (s == "sint8x4") return WGPUVertexFormat_Sint8x4;
-            if (s == "unorm8x2") return WGPUVertexFormat_Unorm8x2;
-            if (s == "unorm8x4") return WGPUVertexFormat_Unorm8x4;
-            if (s == "snorm8x2") return WGPUVertexFormat_Snorm8x2;
-            if (s == "snorm8x4") return WGPUVertexFormat_Snorm8x4;
-            if (s == "uint16x2") return WGPUVertexFormat_Uint16x2;
-            if (s == "uint16x4") return WGPUVertexFormat_Uint16x4;
-            if (s == "sint16x2") return WGPUVertexFormat_Sint16x2;
-            if (s == "sint16x4") return WGPUVertexFormat_Sint16x4;
-            if (s == "unorm16x2") return WGPUVertexFormat_Unorm16x2;
-            if (s == "unorm16x4") return WGPUVertexFormat_Unorm16x4;
-            if (s == "snorm16x2") return WGPUVertexFormat_Snorm16x2;
-            if (s == "snorm16x4") return WGPUVertexFormat_Snorm16x4;
-            if (s == "float16x2") return WGPUVertexFormat_Float16x2;
-            if (s == "float16x4") return WGPUVertexFormat_Float16x4;
-            if (s == "float32") return WGPUVertexFormat_Float32;
-            if (s == "float32x2") return WGPUVertexFormat_Float32x2;
-            if (s == "float32x3") return WGPUVertexFormat_Float32x3;
-            if (s == "float32x4") return WGPUVertexFormat_Float32x4;
-            if (s == "uint32") return WGPUVertexFormat_Uint32;
-            if (s == "uint32x2") return WGPUVertexFormat_Uint32x2;
-            if (s == "uint32x3") return WGPUVertexFormat_Uint32x3;
-            if (s == "uint32x4") return WGPUVertexFormat_Uint32x4;
-            if (s == "sint32") return WGPUVertexFormat_Sint32;
-            if (s == "sint32x2") return WGPUVertexFormat_Sint32x2;
-            if (s == "sint32x3") return WGPUVertexFormat_Sint32x3;
-            if (s == "sint32x4") return WGPUVertexFormat_Sint32x4;
-            return WGPUVertexFormat_Float32;
-        }
-        WGPUIndexFormat indexFormat(const std::string& s)
-        {
-            if (s == "uint16") return WGPUIndexFormat_Uint16;
-            if (s == "uint32") return WGPUIndexFormat_Uint32;
-            return WGPUIndexFormat_Undefined;
-        }
-        WGPUPrimitiveTopology primitiveTopology(const std::string& s)
-        {
-            if (s == "point-list") return WGPUPrimitiveTopology_PointList;
-            if (s == "line-list") return WGPUPrimitiveTopology_LineList;
-            if (s == "line-strip") return WGPUPrimitiveTopology_LineStrip;
-            if (s == "triangle-list") return WGPUPrimitiveTopology_TriangleList;
-            if (s == "triangle-strip") return WGPUPrimitiveTopology_TriangleStrip;
-            return WGPUPrimitiveTopology_TriangleList;
-        }
-        WGPUCullMode cullMode(const std::string& s)
-        {
-            if (s == "none") return WGPUCullMode_None;
-            if (s == "front") return WGPUCullMode_Front;
-            if (s == "back") return WGPUCullMode_Back;
-            return WGPUCullMode_None;
-        }
-        WGPUFrontFace frontFace(const std::string& s)
-        {
-            if (s == "cw") return WGPUFrontFace_CW;
-            if (s == "ccw") return WGPUFrontFace_CCW;
-            return WGPUFrontFace_CCW;
-        }
-        WGPUCompareFunction compareFunction(const std::string& s)
-        {
-            if (s == "never") return WGPUCompareFunction_Never;
-            if (s == "less") return WGPUCompareFunction_Less;
-            if (s == "equal") return WGPUCompareFunction_Equal;
-            if (s == "less-equal") return WGPUCompareFunction_LessEqual;
-            if (s == "greater") return WGPUCompareFunction_Greater;
-            if (s == "not-equal") return WGPUCompareFunction_NotEqual;
-            if (s == "greater-equal") return WGPUCompareFunction_GreaterEqual;
-            if (s == "always") return WGPUCompareFunction_Always;
-            return WGPUCompareFunction_Undefined;
-        }
-        WGPUStencilOperation stencilOperation(const std::string& s)
-        {
-            if (s == "keep") return WGPUStencilOperation_Keep;
-            if (s == "zero") return WGPUStencilOperation_Zero;
-            if (s == "replace") return WGPUStencilOperation_Replace;
-            if (s == "invert") return WGPUStencilOperation_Invert;
-            if (s == "increment-clamp") return WGPUStencilOperation_IncrementClamp;
-            if (s == "decrement-clamp") return WGPUStencilOperation_DecrementClamp;
-            if (s == "increment-wrap") return WGPUStencilOperation_IncrementWrap;
-            if (s == "decrement-wrap") return WGPUStencilOperation_DecrementWrap;
-            return WGPUStencilOperation_Keep;
-        }
-        WGPUBlendFactor blendFactor(const std::string& s)
-        {
-            if (s == "zero") return WGPUBlendFactor_Zero;
-            if (s == "one") return WGPUBlendFactor_One;
-            if (s == "src") return WGPUBlendFactor_Src;
-            if (s == "one-minus-src") return WGPUBlendFactor_OneMinusSrc;
-            if (s == "src-alpha") return WGPUBlendFactor_SrcAlpha;
-            if (s == "one-minus-src-alpha") return WGPUBlendFactor_OneMinusSrcAlpha;
-            if (s == "dst") return WGPUBlendFactor_Dst;
-            if (s == "one-minus-dst") return WGPUBlendFactor_OneMinusDst;
-            if (s == "dst-alpha") return WGPUBlendFactor_DstAlpha;
-            if (s == "one-minus-dst-alpha") return WGPUBlendFactor_OneMinusDstAlpha;
-            if (s == "src-alpha-saturated") return WGPUBlendFactor_SrcAlphaSaturated;
-            if (s == "constant") return WGPUBlendFactor_Constant;
-            if (s == "one-minus-constant") return WGPUBlendFactor_OneMinusConstant;
-            return WGPUBlendFactor_One;
-        }
-        WGPUBlendOperation blendOperation(const std::string& s)
-        {
-            if (s == "add") return WGPUBlendOperation_Add;
-            if (s == "subtract") return WGPUBlendOperation_Subtract;
-            if (s == "reverse-subtract") return WGPUBlendOperation_ReverseSubtract;
-            if (s == "min") return WGPUBlendOperation_Min;
-            if (s == "max") return WGPUBlendOperation_Max;
-            return WGPUBlendOperation_Add;
-        }
-        WGPUAddressMode addressMode(const std::string& s)
-        {
-            if (s == "clamp-to-edge") return WGPUAddressMode_ClampToEdge;
-            if (s == "repeat") return WGPUAddressMode_Repeat;
-            if (s == "mirror-repeat") return WGPUAddressMode_MirrorRepeat;
-            return WGPUAddressMode_ClampToEdge;
-        }
-        WGPUFilterMode filterMode(const std::string& s)
-        {
-            if (s == "nearest") return WGPUFilterMode_Nearest;
-            if (s == "linear") return WGPUFilterMode_Linear;
-            return WGPUFilterMode_Nearest;
-        }
-        WGPUMipmapFilterMode mipmapFilterMode(const std::string& s)
-        {
-            if (s == "nearest") return WGPUMipmapFilterMode_Nearest;
-            if (s == "linear") return WGPUMipmapFilterMode_Linear;
-            return WGPUMipmapFilterMode_Nearest;
-        }
-        WGPUTextureViewDimension textureViewDimension(const std::string& s)
-        {
-            if (s == "1d") return WGPUTextureViewDimension_1D;
-            if (s == "2d") return WGPUTextureViewDimension_2D;
-            if (s == "2d-array") return WGPUTextureViewDimension_2DArray;
-            if (s == "cube") return WGPUTextureViewDimension_Cube;
-            if (s == "cube-array") return WGPUTextureViewDimension_CubeArray;
-            if (s == "3d") return WGPUTextureViewDimension_3D;
-            return WGPUTextureViewDimension_Undefined;
-        }
-        WGPUTextureDimension textureDimension(const std::string& s)
-        {
-            if (s == "1d") return WGPUTextureDimension_1D;
-            if (s == "2d") return WGPUTextureDimension_2D;
-            if (s == "3d") return WGPUTextureDimension_3D;
-            return WGPUTextureDimension_2D;
-        }
-        WGPUTextureSampleType textureSampleType(const std::string& s)
-        {
-            if (s == "float") return WGPUTextureSampleType_Float;
-            if (s == "unfilterable-float") return WGPUTextureSampleType_UnfilterableFloat;
-            if (s == "depth") return WGPUTextureSampleType_Depth;
-            if (s == "sint") return WGPUTextureSampleType_Sint;
-            if (s == "uint") return WGPUTextureSampleType_Uint;
-            return WGPUTextureSampleType_Float;
-        }
-        WGPUStorageTextureAccess storageTextureAccess(const std::string& s)
-        {
-            if (s == "write-only") return WGPUStorageTextureAccess_WriteOnly;
-            if (s == "read-only") return WGPUStorageTextureAccess_ReadOnly;
-            if (s == "read-write") return WGPUStorageTextureAccess_ReadWrite;
-            return WGPUStorageTextureAccess_Undefined;
-        }
-        WGPUSamplerBindingType samplerBindingType(const std::string& s)
-        {
-            if (s == "filtering") return WGPUSamplerBindingType_Filtering;
-            if (s == "non-filtering") return WGPUSamplerBindingType_NonFiltering;
-            if (s == "comparison") return WGPUSamplerBindingType_Comparison;
-            return WGPUSamplerBindingType_Filtering;
-        }
-        WGPUBufferBindingType bufferBindingType(const std::string& s)
-        {
-            if (s == "uniform") return WGPUBufferBindingType_Uniform;
-            if (s == "storage") return WGPUBufferBindingType_Storage;
-            if (s == "read-only-storage") return WGPUBufferBindingType_ReadOnlyStorage;
-            return WGPUBufferBindingType_Uniform;
-        }
-        WGPULoadOp loadOp(const std::string& s)
-        {
-            if (s == "load") return WGPULoadOp_Load;
-            if (s == "clear") return WGPULoadOp_Clear;
-            return WGPULoadOp_Load;
-        }
-        WGPUStoreOp storeOp(const std::string& s)
-        {
-            if (s == "store") return WGPUStoreOp_Store;
-            if (s == "discard") return WGPUStoreOp_Discard;
-            return WGPUStoreOp_Store;
-        }
-        WGPUVertexStepMode vertexStepMode(const std::string& s)
-        {
-            if (s == "vertex") return WGPUVertexStepMode_Vertex;
-            if (s == "instance") return WGPUVertexStepMode_Instance;
-            return WGPUVertexStepMode_Vertex;
-        }
-        WGPUFeatureName featureName(const std::string& s)
-        {
-            if (s == "depth-clip-control") return WGPUFeatureName_DepthClipControl;
-            if (s == "depth32float-stencil8") return WGPUFeatureName_Depth32FloatStencil8;
-            if (s == "texture-compression-bc") return WGPUFeatureName_TextureCompressionBC;
-            if (s == "texture-compression-etc2") return WGPUFeatureName_TextureCompressionETC2;
-            if (s == "texture-compression-astc") return WGPUFeatureName_TextureCompressionASTC;
-            if (s == "timestamp-query") return WGPUFeatureName_TimestampQuery;
-            if (s == "indirect-first-instance") return WGPUFeatureName_IndirectFirstInstance;
-            if (s == "shader-f16") return WGPUFeatureName_ShaderF16;
-            if (s == "rg11b10ufloat-renderable") return WGPUFeatureName_RG11B10UfloatRenderable;
-            if (s == "bgra8unorm-storage") return WGPUFeatureName_BGRA8UnormStorage;
-            if (s == "float32-filterable") return WGPUFeatureName_Float32Filterable;
-            if (s == "dual-source-blending") return WGPUFeatureName_DualSourceBlending;
-            return WGPUFeatureName(0);
-        }
-        WGPUQueryType queryType(const std::string& s)
-        {
-            if (s == "occlusion") return WGPUQueryType_Occlusion;
-            if (s == "timestamp") return WGPUQueryType_Timestamp;
-            return WGPUQueryType_Occlusion;
-        }
-        WGPUPowerPreference powerPreference(const std::string& s)
-        {
-            if (s == "low-power") return WGPUPowerPreference_LowPower;
-            if (s == "high-performance") return WGPUPowerPreference_HighPerformance;
-            return WGPUPowerPreference_Undefined;
+            return "bgra8unorm";
         }
 
         // ---- limits ----------------------------------------------------------
@@ -2455,28 +2485,28 @@ namespace Babylon::Plugins::NativeDawn
                         if (e.Get("buffer").IsObject())
                         {
                             Napi::Object b = e.Get("buffer").As<Napi::Object>();
-                            dst.buffer.type = bufferBindingType(PropStr(b, "type").empty() ? "uniform" : PropStr(b, "type"));
+                            dst.buffer.type = bufferBindingType(PropStrOr(b, "type", "uniform"));
                             dst.buffer.hasDynamicOffset = PropBool(b, "hasDynamicOffset", false);
                             dst.buffer.minBindingSize = PropU64(b, "minBindingSize", 0);
                         }
                         if (e.Get("sampler").IsObject())
                         {
                             Napi::Object s = e.Get("sampler").As<Napi::Object>();
-                            dst.sampler.type = samplerBindingType(PropStr(s, "type").empty() ? "filtering" : PropStr(s, "type"));
+                            dst.sampler.type = samplerBindingType(PropStrOr(s, "type", "filtering"));
                         }
                         if (e.Get("texture").IsObject())
                         {
                             Napi::Object t = e.Get("texture").As<Napi::Object>();
-                            dst.texture.sampleType = textureSampleType(PropStr(t, "sampleType").empty() ? "float" : PropStr(t, "sampleType"));
-                            dst.texture.viewDimension = textureViewDimension(PropStr(t, "viewDimension").empty() ? "2d" : PropStr(t, "viewDimension"));
+                            dst.texture.sampleType = textureSampleType(PropStrOr(t, "sampleType", "float"));
+                            dst.texture.viewDimension = textureViewDimension(PropStrOr(t, "viewDimension", "2d"));
                             dst.texture.multisampled = PropBool(t, "multisampled", false);
                         }
                         if (e.Get("storageTexture").IsObject())
                         {
                             Napi::Object st = e.Get("storageTexture").As<Napi::Object>();
-                            dst.storageTexture.access = storageTextureAccess(PropStr(st, "access").empty() ? "write-only" : PropStr(st, "access"));
+                            dst.storageTexture.access = storageTextureAccess(PropStrOr(st, "access", "write-only"));
                             dst.storageTexture.format = textureFormat(PropStr(st, "format"));
-                            dst.storageTexture.viewDimension = textureViewDimension(PropStr(st, "viewDimension").empty() ? "2d" : PropStr(st, "viewDimension"));
+                            dst.storageTexture.viewDimension = textureViewDimension(PropStrOr(st, "viewDimension", "2d"));
                         }
                     }
                 }
