@@ -17,7 +17,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Native Canvas",
             "playgroundId": "#TKVFSA#8",
-            "referenceImage": "native-canvas.png"
+            "referenceImage": "native-canvas.png",
+            "reason": "Error: Invalid argument while creating the scene on WebGPU/Dawn"
         },
         {
             "title": "EXR Loader",
@@ -143,7 +144,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Dynamic Texture context clip",
             "playgroundId": "#FU0ES5#47",
-            "referenceImage": "dynamicTextureClip.png"
+            "referenceImage": "dynamicTextureClip.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (4.760%)"
         },
         {
             "title": "GUI3D SpherePanel",
@@ -240,7 +242,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "LightFalloff",
             "playgroundId": "#20OAV9#11218",
-            "referenceImage": "lightFalloff.png"
+            "referenceImage": "lightFalloff.png",
+            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
         },
         {
             "title": "Chromatic aberration",
@@ -305,7 +308,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test",
             "playgroundId": "#W7E7CF#34",
-            "referenceImage": "scissor-test.png"
+            "referenceImage": "scissor-test.png",
+            "reason": "mostly black on WebGPU/Dawn (95.693% pixel diff)"
         },
         {
             "title": "Scissor test with 0.9 hardware scaling",
@@ -320,19 +324,22 @@
             "title": "Scissor test with 1.5 hardware scaling",
             "playgroundId": "#W7E7CF#34",
             "replace": "//options//, hardwareScalingLevel = 1.5;",
-            "referenceImage": "scissor-test-3.png"
+            "referenceImage": "scissor-test-3.png",
+            "reason": "WebGPU/Dawn readback stays 600x400 while hardware scaling produces a 425600-byte reference (render data is 960000 bytes)"
         },
         {
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with negative x and y",
             "playgroundId": "#3L5BCD#2",
-            "referenceImage": "scissorTestNegativeXandY.png"
+            "referenceImage": "scissorTestNegativeXandY.png",
+            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
         },
         {
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with out of bounds width and height",
             "playgroundId": "#3L5BCD#3",
-            "referenceImage": "scissorTestOobWidthAndHeight.png"
+            "referenceImage": "scissorTestOobWidthAndHeight.png",
+            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
         },
         {
             "title": "setParent",
@@ -456,7 +463,8 @@
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 0, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode0.png",
-            "errorRatio": 8.0
+            "errorRatio": 8.0,
+            "reason": "LineLoop is an unsupported fill mode in WebGPU"
         },
         {
             "excludedGraphicsApis": ["WebGPU"],
@@ -464,7 +472,8 @@
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 1, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode1.png",
-            "errorRatio": 8.0
+            "errorRatio": 8.0,
+            "reason": "LineLoop is an unsupported fill mode in WebGPU"
         },
         {
             "title": "GLTF Mesh Primitives",
@@ -646,7 +655,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "RH billboard",
             "playgroundId": "#PDO1L6#1",
-            "referenceImage": "rh-billboard.png"
+            "referenceImage": "rh-billboard.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (5.042%)"
         },
         {
             "title": "RH billboard2",
@@ -1959,7 +1969,8 @@
             "title": "Scissor test with 1.5 hardware scaling",
             "playgroundId": "#W7E7CF#38",
             "replace": "//options//, hardwareScalingLevel = 1.5;",
-            "referenceImage": "scissor-test-3.png"
+            "referenceImage": "scissor-test-3.png",
+            "reason": "WebGPU/Dawn readback stays 600x400 while hardware scaling produces a 425600-byte reference (render data is 960000 bytes)"
         },
         {
             "title": "Refraction local cube map STD",
@@ -2168,13 +2179,15 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Load GUI snippet with unicode",
             "playgroundId": "#YS93KY#1",
-            "referenceImage": "loadGuiSnippetWithUnicode.png"
+            "referenceImage": "loadGuiSnippetWithUnicode.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (4.229%)"
         },
         {
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Parse GUI json with unicode",
             "playgroundId": "#ERVGT5#1",
-            "referenceImage": "parseGuiJsonWithUnicode.png"
+            "referenceImage": "parseGuiJsonWithUnicode.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (4.229%)"
         },
         {
             "title": "Multi shadow generators per light",
@@ -3000,7 +3013,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Synchronous Effect",
             "playgroundId": "#D9XXL3#1",
-            "referenceImage": "Synchronous-Effect.png"
+            "referenceImage": "Synchronous-Effect.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (24.835%)"
         },
         {
             "title": "Show Loading Screen",
@@ -3117,7 +3131,6 @@
             "referenceImage": "sponza-clustered-lighting-viewports.png"
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Test code inlining",
             "playgroundId": "#YG3BBF#51",
             "referenceImage": "Test-code-inlining.png"
@@ -4280,7 +4293,8 @@
             "excludedGraphicsApis": ["WebGPU"],
             "title": "Vertex Pulling - UV Channels 1-6",
             "playgroundId": "#0SA2NH#4",
-            "referenceImage": "vertexPullingUVChannels.png"
+            "referenceImage": "vertexPullingUVChannels.png",
+            "reason": "pixel diff vs reference on WebGPU/Dawn (22.445%)"
         },
         {
             "title": "GPU Particles - Basic Properties - Size",
@@ -5087,7 +5101,7 @@
             "playgroundId": "#4N0QRP#1",
             "referenceImage": "allProcTextures.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "\r"
+            "reason": "BABYLON.NormalMapProceduralTexture is not included in the native script bundle"
         },
         {
             "title": "Loading glTF model with KTX2 textures",
