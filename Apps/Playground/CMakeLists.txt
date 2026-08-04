@@ -16,6 +16,7 @@ set(DEPENDENCIES
 set(SCRIPTS
     "Scripts/experience.js"
     "Scripts/playground_runner.js"
+    "Scripts/run_snippet.js"
     "Scripts/validation_native.js"
     "Scripts/lite_native.js"
     "Scripts/config.json")

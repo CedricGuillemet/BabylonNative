@@ -171,6 +171,20 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEDAWN)
         message(STATUS "BABYLON_NATIVE_PLUGIN_NATIVEDAWN is ON: forcing BABYLON_NATIVE_PLUGIN_NATIVEENGINE OFF (mutually exclusive backends).")
     endif()
     set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE OFF CACHE BOOL "Include Babylon Native Plugin NativeEngine." FORCE)
+
+    # NativeDawn's WebGPU shader pipeline transpiles GLSL -> SPIR-V -> WGSL at
+    # runtime through Babylon's glslang and twgsl WebAssembly modules. Windows'
+    # in-box Chakra engine (the Node-API default here) has a WASM compiler limit
+    # that rejects glslang.wasm ("Maximum supported nested blocks reached"), so
+    # every GLSL-authored shader (NodeMaterial GLSL mode, ShaderMaterial,
+    # ProceduralTexture, custom post-processes, ...) fails to compile and its
+    # scene hangs forever on executeWhenReady. V8 runs the exact same modules the
+    # browser uses, so default Node-API to V8 whenever NativeDawn is enabled
+    # (unless the caller explicitly picked an engine via -D NAPI_JAVASCRIPT_ENGINE).
+    if(WIN32 AND NOT WINDOWS_STORE AND NOT DEFINED NAPI_JAVASCRIPT_ENGINE)
+        set(NAPI_JAVASCRIPT_ENGINE "V8" CACHE STRING "JavaScript engine for Node-API")
+        message(STATUS "BABYLON_NATIVE_PLUGIN_NATIVEDAWN is ON: defaulting NAPI_JAVASCRIPT_ENGINE to V8 (Chakra cannot compile the glslang/twgsl WASM modules).")
+    endif()
 endif()
 
 # Embedding

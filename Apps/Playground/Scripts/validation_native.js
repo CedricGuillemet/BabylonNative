@@ -101,9 +101,28 @@
                     " skipped=" + skippedCount);
     }
 
-    const engine = new BABYLON.NativeEngine();
+    // Backend detection: the NativeDawn (WebGPU) backend pre-creates a
+    // WebGPUEngine (aliased as BABYLON.NativeEngine) and drives its render loop
+    // from the host frame pump, promoting it to globalThis.__dawnEngine once
+    // initAsync (async, driven by host frames) completes. Reuse that same
+    // instance so runRenderLoop targets the engine the host actually presents,
+    // rather than constructing a second one.
+    //
+    // Detect the backend via the plugin-specific `_nativeDawnClear` global (the
+    // bgfx NativeEngine backend has neither it nor navigator.gpu). Note `_native`
+    // exists on BOTH backends here -- the Canvas polyfill provides it -- so it
+    // can't be used to tell them apart.
+    const isDawn = (typeof globalThis._nativeDawnClear === "function");
+    const engine = isDawn
+        ? (globalThis.__dawnEngine || globalThis.__dawnPendingEngine || new BABYLON.NativeEngine())
+        : new BABYLON.NativeEngine();
     globalThis.engine = engine;
-    engine.getCaps().parallelShaderCompile = undefined;
+    // parallelShaderCompile is a WebGL2 (KHR_parallel_shader_compile) cap; on
+    // Dawn the caps table isn't populated until initAsync completes, so this is
+    // applied in the Dawn start path below once the engine is ready.
+    if (!isDawn) {
+        engine.getCaps().parallelShaderCompile = undefined;
+    }
 
     // The default HTML loading screen pokes at DOM nodes (document head, an
     // <img> logo with a network fetch) that don't meaningfully exist in this
@@ -752,13 +771,37 @@
     }, false);
 
 
-    BABYLON.Tools.LoadFile("https://raw.githubusercontent.com/CedricGuillemet/dump/master/droidsans.ttf", (data) => {
-        _native.Canvas.loadTTFAsync("droidsans", data).then(function () {
-            _native.RootUrl = "https://playground.babylonjs.com";
-            console.log("Starting");
-            TestUtils.setTitle("Starting Native Validation Tests");
-            TestUtils.updateSize(testWidth, testHeight);
-            xhr.send();
-        });
-    }, undefined, undefined, true);
+    function startValidation() {
+        console.log("Starting");
+        TestUtils.setTitle("Starting Native Validation Tests");
+        TestUtils.updateSize(testWidth, testHeight);
+        xhr.send();
+    }
+
+    if (isDawn) {
+        // The WebGPU engine completes initAsync asynchronously, pumped by the
+        // host frame loop (RenderFrame -> frame() -> requestAnimationFrame).
+        // Wait until the NativeDawn plugin promotes it to __dawnEngine before
+        // starting: runRenderLoop needs a fully initialized engine and getCaps()
+        // is only populated post-init. The bgfx-only `_native` font/RootUrl
+        // setup is skipped -- playground assets load via absolute https URLs
+        // (see loadPG), and GUI text tests that need the bundled font are gated
+        // by excludedGraphicsApis:["WebGPU"] in config.json.
+        const waitForEngine = function () {
+            if (globalThis.__dawnEngine) {
+                globalThis.__dawnEngine.getCaps().parallelShaderCompile = undefined;
+                startValidation();
+            } else {
+                setTimeout(waitForEngine, 16);
+            }
+        };
+        waitForEngine();
+    } else {
+        BABYLON.Tools.LoadFile("https://raw.githubusercontent.com/CedricGuillemet/dump/master/droidsans.ttf", (data) => {
+            _native.Canvas.loadTTFAsync("droidsans", data).then(function () {
+                _native.RootUrl = "https://playground.babylonjs.com";
+                startValidation();
+            });
+        }, undefined, undefined, true);
+    }
 })();

@@ -8,7 +8,7 @@
 #include <windows.h>
 #endif
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.h>
 
 // jsruntimehost's V8 N-API enqueues GC finalizers into napi_env__::pending_finalizers
 // but, unlike real Node's event-loop-backed env, never drains that queue at runtime.
@@ -51,15 +51,17 @@ namespace Babylon::Plugins::NativeDawn
     namespace
     {
         // Global Dawn state for the experiment. Single window / single device.
+        // Handles are raw C objects; ownership is tracked explicitly (see
+        // WgpuOps / MakeExt below) rather than by the C++ wrapper's RAII.
         struct State
         {
-            wgpu::Instance instance;
-            wgpu::Adapter adapter;
-            wgpu::Device device;
-            wgpu::Queue queue;
-            wgpu::Surface surface;
-            wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::BGRA8Unorm;
-            wgpu::Texture currentSurfaceTexture;
+            WGPUInstance instance = nullptr;
+            WGPUAdapter adapter = nullptr;
+            WGPUDevice device = nullptr;
+            WGPUQueue queue = nullptr;
+            WGPUSurface surface = nullptr;
+            WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+            WGPUTexture currentSurfaceTexture = nullptr;
             void* hwnd = nullptr;
             uint32_t width = 0;
             uint32_t height = 0;
@@ -91,10 +93,19 @@ namespace Babylon::Plugins::NativeDawn
             g_pendingDestroy.resize(w);
         }
 
-        void LogDeviceError(const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message)
+        void LogDeviceError(WGPUDevice const*, WGPUErrorType type, WGPUStringView message, void*, void*)
         {
             std::fprintf(stderr, "[NativeDawn] device error (%d): %.*s\n",
                 static_cast<int>(type), static_cast<int>(message.length), message.data);
+        }
+
+        // Blocks the calling thread until `f` resolves. The C API has no
+        // convenience overload, so the wait info has to be built explicitly.
+        void WaitFuture(WGPUFuture f)
+        {
+            WGPUFutureWaitInfo wait = WGPU_FUTURE_WAIT_INFO_INIT;
+            wait.future = f;
+            wgpuInstanceWaitAny(g_state.instance, 1, &wait, UINT64_MAX);
         }
 
         bool CreateDeviceAndSurface(void* window, uint32_t width, uint32_t height)
@@ -104,42 +115,48 @@ namespace Babylon::Plugins::NativeDawn
             g_state.height = height;
 
             // Instance with synchronous WaitAny support.
-            static const auto kTimedWaitAny = wgpu::InstanceFeatureName::TimedWaitAny;
-            wgpu::InstanceDescriptor instDesc{};
+            static const auto kTimedWaitAny = WGPUInstanceFeatureName_TimedWaitAny;
+            WGPUInstanceDescriptor instDesc = WGPU_INSTANCE_DESCRIPTOR_INIT;
             instDesc.requiredFeatureCount = 1;
             instDesc.requiredFeatures = &kTimedWaitAny;
-            g_state.instance = wgpu::CreateInstance(&instDesc);
+            g_state.instance = wgpuCreateInstance(&instDesc);
             if (!g_state.instance)
             {
                 std::fprintf(stderr, "[NativeDawn] CreateInstance failed\n");
                 return false;
             }
 
+            // Blocks the calling thread until `f` resolves.
+            auto waitFuture = [](WGPUFuture f) { WaitFuture(f); };
+
             // Adapter (high performance).
-            wgpu::RequestAdapterOptions adapterOpts{};
-            adapterOpts.powerPreference = wgpu::PowerPreference::HighPerformance;
-            wgpu::Future af = g_state.instance.RequestAdapter(&adapterOpts, wgpu::CallbackMode::WaitAnyOnly,
-                [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message, wgpu::Adapter* out) {
-                    if (status == wgpu::RequestAdapterStatus::Success)
-                    {
-                        *out = std::move(adapter);
-                    }
-                    else
-                    {
-                        std::fprintf(stderr, "[NativeDawn] RequestAdapter failed: %.*s\n",
-                            static_cast<int>(message.length), message.data);
-                    }
-                },
-                &g_state.adapter);
-            g_state.instance.WaitAny(af, UINT64_MAX);
+            WGPURequestAdapterOptions adapterOpts = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
+            adapterOpts.powerPreference = WGPUPowerPreference_HighPerformance;
+            WGPURequestAdapterCallbackInfo adapterCb = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
+            adapterCb.mode = WGPUCallbackMode_WaitAnyOnly;
+            adapterCb.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
+                                     WGPUStringView message, void* out, void*) {
+                if (status == WGPURequestAdapterStatus_Success)
+                {
+                    // Takes ownership of the reference handed to the callback.
+                    *static_cast<WGPUAdapter*>(out) = adapter;
+                }
+                else
+                {
+                    std::fprintf(stderr, "[NativeDawn] RequestAdapter failed: %.*s\n",
+                        static_cast<int>(message.length), message.data);
+                }
+            };
+            adapterCb.userdata1 = &g_state.adapter;
+            waitFuture(wgpuInstanceRequestAdapter(g_state.instance, &adapterOpts, adapterCb));
             if (!g_state.adapter)
             {
                 return false;
             }
 
             // Device.
-            wgpu::DeviceDescriptor devDesc{};
-            devDesc.SetUncapturedErrorCallback(&LogDeviceError);
+            WGPUDeviceDescriptor devDesc = WGPU_DEVICE_DESCRIPTOR_INIT;
+            devDesc.uncapturedErrorCallbackInfo.callback = &LogDeviceError;
 
             // WARP (software D3D12) MSAA-resolve workaround.
             // On the software adapter used by CI runners (no discrete GPU),
@@ -156,10 +173,10 @@ namespace Babylon::Plugins::NativeDawn
             // consistently report the CI WARP adapter as AdapterType::CPU, so we
             // also match the Microsoft vendor id (0x1414) and WARP / "Basic
             // Render Driver" device/description strings.
-            wgpu::AdapterInfo adapterInfo{};
-            g_state.adapter.GetInfo(&adapterInfo);
+            WGPUAdapterInfo adapterInfo = WGPU_ADAPTER_INFO_INIT;
+            wgpuAdapterGetInfo(g_state.adapter, &adapterInfo);
 
-            auto svContains = [](wgpu::StringView sv, const char* needle) -> bool {
+            auto svContains = [](WGPUStringView sv, const char* needle) -> bool {
                 if (sv.data == nullptr || sv.length == 0) { return false; }
                 std::string s(sv.data, sv.length);
                 std::string n(needle);
@@ -168,7 +185,7 @@ namespace Babylon::Plugins::NativeDawn
                 return s.find(n) != std::string::npos;
             };
             const bool isSoftwareAdapter =
-                adapterInfo.adapterType == wgpu::AdapterType::CPU ||
+                adapterInfo.adapterType == WGPUAdapterType_CPU ||
                 adapterInfo.vendorID == 0x1414 /* Microsoft (WARP) */ ||
                 svContains(adapterInfo.device, "warp") ||
                 svContains(adapterInfo.device, "basic render") ||
@@ -182,43 +199,49 @@ namespace Babylon::Plugins::NativeDawn
                 static_cast<int>(adapterInfo.adapterType), static_cast<int>(adapterInfo.backendType),
                 isSoftwareAdapter ? 1 : 0);
 
-            wgpu::DawnTogglesDescriptor toggles{};
+            // Strings in adapterInfo are owned by Dawn; the C API requires an
+            // explicit free (the C++ wrapper did this in its destructor).
+            wgpuAdapterInfoFreeMembers(adapterInfo);
+
+            WGPUDawnTogglesDescriptor toggles = WGPU_DAWN_TOGGLES_DESCRIPTOR_INIT;
             const char* kWarpWorkaround = "nonzero_clear_resources_on_creation_for_testing";
             if (isSoftwareAdapter)
             {
                 toggles.enabledToggleCount = 1;
                 toggles.enabledToggles = &kWarpWorkaround;
-                devDesc.nextInChain = &toggles;
+                devDesc.nextInChain = &toggles.chain;
                 std::fprintf(stderr, "[NativeDawn] software adapter detected -- enabling MSAA-resolve lazy-clear workaround\n");
             }
-            wgpu::Future df = g_state.adapter.RequestDevice(&devDesc, wgpu::CallbackMode::WaitAnyOnly,
-                [](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message, wgpu::Device* out) {
-                    if (status == wgpu::RequestDeviceStatus::Success)
-                    {
-                        *out = std::move(device);
-                    }
-                    else
-                    {
-                        std::fprintf(stderr, "[NativeDawn] RequestDevice failed: %.*s\n",
-                            static_cast<int>(message.length), message.data);
-                    }
-                },
-                &g_state.device);
-            g_state.instance.WaitAny(df, UINT64_MAX);
+            WGPURequestDeviceCallbackInfo deviceCb = WGPU_REQUEST_DEVICE_CALLBACK_INFO_INIT;
+            deviceCb.mode = WGPUCallbackMode_WaitAnyOnly;
+            deviceCb.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
+                                    WGPUStringView message, void* out, void*) {
+                if (status == WGPURequestDeviceStatus_Success)
+                {
+                    *static_cast<WGPUDevice*>(out) = device;
+                }
+                else
+                {
+                    std::fprintf(stderr, "[NativeDawn] RequestDevice failed: %.*s\n",
+                        static_cast<int>(message.length), message.data);
+                }
+            };
+            deviceCb.userdata1 = &g_state.device;
+            waitFuture(wgpuAdapterRequestDevice(g_state.adapter, &devDesc, deviceCb));
             if (!g_state.device)
             {
                 return false;
             }
-            g_state.queue = g_state.device.GetQueue();
+            g_state.queue = wgpuDeviceGetQueue(g_state.device);
 
             // Surface from the native window (Win32 HWND).
 #if defined(_WIN32)
-            wgpu::SurfaceSourceWindowsHWND chained{};
+            WGPUSurfaceSourceWindowsHWND chained = WGPU_SURFACE_SOURCE_WINDOWS_HWND_INIT;
             chained.hwnd = window;
             chained.hinstance = ::GetModuleHandle(nullptr);
-            wgpu::SurfaceDescriptor surfDesc{};
-            surfDesc.nextInChain = &chained;
-            g_state.surface = g_state.instance.CreateSurface(&surfDesc);
+            WGPUSurfaceDescriptor surfDesc = WGPU_SURFACE_DESCRIPTOR_INIT;
+            surfDesc.nextInChain = &chained.chain;
+            g_state.surface = wgpuInstanceCreateSurface(g_state.instance, &surfDesc);
 #endif
             if (!g_state.surface)
             {
@@ -227,21 +250,22 @@ namespace Babylon::Plugins::NativeDawn
             }
 
             // Pick the preferred format and configure.
-            wgpu::SurfaceCapabilities caps{};
-            g_state.surface.GetCapabilities(g_state.adapter, &caps);
+            WGPUSurfaceCapabilities caps = WGPU_SURFACE_CAPABILITIES_INIT;
+            wgpuSurfaceGetCapabilities(g_state.surface, g_state.adapter, &caps);
             if (caps.formatCount > 0)
             {
                 g_state.surfaceFormat = caps.formats[0];
             }
+            wgpuSurfaceCapabilitiesFreeMembers(caps);
 
-            wgpu::SurfaceConfiguration cfg{};
+            WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
             cfg.device = g_state.device;
             cfg.format = g_state.surfaceFormat;
-            cfg.usage = wgpu::TextureUsage::RenderAttachment;
+            cfg.usage = WGPUTextureUsage_RenderAttachment;
             cfg.width = width;
             cfg.height = height;
-            cfg.presentMode = wgpu::PresentMode::Fifo;
-            g_state.surface.Configure(&cfg);
+            cfg.presentMode = WGPUPresentMode_Fifo;
+            wgpuSurfaceConfigure(g_state.surface, &cfg);
 
             g_state.ready = true;
             std::fprintf(stderr, "[NativeDawn] Dawn device + surface ready (%ux%u, format=%d)\n",
@@ -257,32 +281,38 @@ namespace Babylon::Plugins::NativeDawn
                 return;
             }
 
-            wgpu::SurfaceTexture st{};
-            g_state.surface.GetCurrentTexture(&st);
+            WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
+            wgpuSurfaceGetCurrentTexture(g_state.surface, &st);
             if (!st.texture)
             {
                 std::fprintf(stderr, "[NativeDawn] GetCurrentTexture: null\n");
                 return;
             }
 
-            wgpu::TextureView view = st.texture.CreateView();
+            WGPUTextureView view = wgpuTextureCreateView(st.texture, nullptr);
 
-            wgpu::RenderPassColorAttachment color{};
+            WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
             color.view = view;
-            color.loadOp = wgpu::LoadOp::Clear;
-            color.storeOp = wgpu::StoreOp::Store;
+            color.loadOp = WGPULoadOp_Clear;
+            color.storeOp = WGPUStoreOp_Store;
             color.clearValue = {r, g, b, 1.0f};
 
-            wgpu::RenderPassDescriptor passDesc{};
+            WGPURenderPassDescriptor passDesc = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
             passDesc.colorAttachmentCount = 1;
             passDesc.colorAttachments = &color;
 
-            wgpu::CommandEncoder encoder = g_state.device.CreateCommandEncoder();
-            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
-            pass.End();
-            wgpu::CommandBuffer commands = encoder.Finish();
-            g_state.queue.Submit(1, &commands);
-            g_state.surface.Present();
+            WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(g_state.device, nullptr);
+            WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+            wgpuRenderPassEncoderEnd(pass);
+            WGPUCommandBuffer commands = wgpuCommandEncoderFinish(encoder, nullptr);
+            wgpuQueueSubmit(g_state.queue, 1, &commands);
+            wgpuSurfacePresent(g_state.surface);
+
+            wgpuCommandBufferRelease(commands);
+            wgpuRenderPassEncoderRelease(pass);
+            wgpuCommandEncoderRelease(encoder);
+            wgpuTextureViewRelease(view);
+            wgpuTextureRelease(st.texture);
         }
     }
 
@@ -300,7 +330,7 @@ namespace Babylon::Plugins::NativeDawn
         // ---- small JS helpers ------------------------------------------------
         inline bool IsNullish(Napi::Value v) { return v.IsUndefined() || v.IsNull(); }
 
-        std::string SvToStr(const wgpu::StringView& sv)
+        std::string SvToStr(const WGPUStringView& sv)
         {
             if (sv.data == nullptr) return {};
             if (sv.length == static_cast<size_t>(-1)) return std::string(sv.data);
@@ -361,17 +391,76 @@ namespace Babylon::Plugins::NativeDawn
         void PumpJsFinalizers(Napi::Env, bool) {}
 #endif
 
+        // The C API has no RAII: handles are raw pointers with manual
+        // refcounting. WgpuOps<T> maps each object type to its AddRef/Release
+        // pair so the N-API wrapper below can hold a strong reference for
+        // exactly as long as the JS object is alive -- the same lifetime the
+        // C++ wrapper types used to provide implicitly.
+        template <typename T>
+        struct WgpuOps;
+
+#define NATIVEDAWN_WGPU_OPS(Type)                                              \
+    template <>                                                                \
+    struct WgpuOps<WGPU##Type>                                                 \
+    {                                                                          \
+        static void AddRef(WGPU##Type h) { if (h) wgpu##Type##AddRef(h); }     \
+        static void Release(WGPU##Type h) { if (h) wgpu##Type##Release(h); }   \
+    };
+
+        NATIVEDAWN_WGPU_OPS(Adapter)
+        NATIVEDAWN_WGPU_OPS(BindGroup)
+        NATIVEDAWN_WGPU_OPS(BindGroupLayout)
+        NATIVEDAWN_WGPU_OPS(Buffer)
+        NATIVEDAWN_WGPU_OPS(CommandBuffer)
+        NATIVEDAWN_WGPU_OPS(CommandEncoder)
+        NATIVEDAWN_WGPU_OPS(ComputePassEncoder)
+        NATIVEDAWN_WGPU_OPS(ComputePipeline)
+        NATIVEDAWN_WGPU_OPS(Device)
+        NATIVEDAWN_WGPU_OPS(Instance)
+        NATIVEDAWN_WGPU_OPS(PipelineLayout)
+        NATIVEDAWN_WGPU_OPS(QuerySet)
+        NATIVEDAWN_WGPU_OPS(Queue)
+        NATIVEDAWN_WGPU_OPS(RenderBundle)
+        NATIVEDAWN_WGPU_OPS(RenderBundleEncoder)
+        NATIVEDAWN_WGPU_OPS(RenderPassEncoder)
+        NATIVEDAWN_WGPU_OPS(RenderPipeline)
+        NATIVEDAWN_WGPU_OPS(Sampler)
+        NATIVEDAWN_WGPU_OPS(ShaderModule)
+        NATIVEDAWN_WGPU_OPS(Surface)
+        NATIVEDAWN_WGPU_OPS(Texture)
+        NATIVEDAWN_WGPU_OPS(TextureView)
+
+#undef NATIVEDAWN_WGPU_OPS
+
+        // Takes ownership of one reference to `h` and releases it when the JS
+        // wrapper is finalized. WebGPU C creation functions return a handle the
+        // caller owns, so `MakeExt(env, wgpuDeviceCreateX(...))` transfers that
+        // reference directly. Wrapping a *borrowed* handle (one this code did
+        // not just create, e.g. g_state.device) requires an explicit
+        // WgpuOps<T>::AddRef at the call site.
         template <typename T>
         Napi::External<T> MakeExt(Napi::Env env, const T& h)
         {
             ++g_wrappersCreated;
-            return Napi::External<T>::New(env, new T(h), [](Napi::Env, T* p) { delete p; });
+            return Napi::External<T>::New(env, new T(h), [](Napi::Env, T* p) {
+                WgpuOps<T>::Release(*p);
+                delete p;
+            });
         }
 
         template <typename T>
         void SetHandle(Napi::Object o, const T& h)
         {
             o.Set("_h", MakeExt<T>(o.Env(), h));
+        }
+
+        // Wraps a handle this code does not own (e.g. a long-lived g_state
+        // object). MakeExt consumes a reference, so take one first.
+        template <typename T>
+        void SetBorrowedHandle(Napi::Object o, const T& h)
+        {
+            WgpuOps<T>::AddRef(h);
+            SetHandle(o, h);
         }
 
         template <typename T>
@@ -383,6 +472,14 @@ namespace Babylon::Plugins::NativeDawn
             Napi::Value h = o.Get("_h");
             if (!h.IsExternal()) return nullptr;
             return h.As<Napi::External<T>>().Data();
+        }
+
+        // The C API takes strings as an explicit (data, length) pair rather
+        // than a NUL-terminated pointer. The referenced storage must outlive
+        // the descriptor it is attached to.
+        WGPUStringView StrView(const std::string& s)
+        {
+            return WGPUStringView{s.c_str(), s.size()};
         }
 
         std::string TypeTag(Napi::Value v)
@@ -574,9 +671,9 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUExtent3D / GPUOrigin3D / GPUColor parsing --------------------
-        wgpu::Extent3D ParseExtent3D(Napi::Value v)
+        WGPUExtent3D ParseExtent3D(Napi::Value v)
         {
-            wgpu::Extent3D e{};
+            WGPUExtent3D e = WGPU_EXTENT_3D_INIT;
             e.width = 1; e.height = 1; e.depthOrArrayLayers = 1;
             if (v.IsArray())
             {
@@ -596,9 +693,9 @@ namespace Babylon::Plugins::NativeDawn
             if (e.depthOrArrayLayers == 0) e.depthOrArrayLayers = 1;
             return e;
         }
-        wgpu::Origin3D ParseOrigin3D(Napi::Value v)
+        WGPUOrigin3D ParseOrigin3D(Napi::Value v)
         {
-            wgpu::Origin3D o3{};
+            WGPUOrigin3D o3 = WGPU_ORIGIN_3D_INIT;
             if (v.IsArray())
             {
                 Napi::Array a = v.As<Napi::Array>();
@@ -615,9 +712,9 @@ namespace Babylon::Plugins::NativeDawn
             }
             return o3;
         }
-        wgpu::Color ParseColor(Napi::Value v)
+        WGPUColor ParseColor(Napi::Value v)
         {
-            wgpu::Color c{};
+            WGPUColor c = WGPU_COLOR_INIT;
             if (v.IsArray())
             {
                 Napi::Array a = v.As<Napi::Array>();
@@ -638,359 +735,344 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- enum string -> wgpu mappings ------------------------------------
-        wgpu::TextureFormat textureFormat(const std::string& s)
+        WGPUTextureFormat textureFormat(const std::string& s)
         {
-            using F = wgpu::TextureFormat;
-            if (s == "r8unorm") return F::R8Unorm;
-            if (s == "r8snorm") return F::R8Snorm;
-            if (s == "r8uint") return F::R8Uint;
-            if (s == "r8sint") return F::R8Sint;
-            if (s == "r16uint") return F::R16Uint;
-            if (s == "r16sint") return F::R16Sint;
-            if (s == "r16float") return F::R16Float;
-            if (s == "rg8unorm") return F::RG8Unorm;
-            if (s == "rg8snorm") return F::RG8Snorm;
-            if (s == "rg8uint") return F::RG8Uint;
-            if (s == "rg8sint") return F::RG8Sint;
-            if (s == "r32uint") return F::R32Uint;
-            if (s == "r32sint") return F::R32Sint;
-            if (s == "r32float") return F::R32Float;
-            if (s == "rg16uint") return F::RG16Uint;
-            if (s == "rg16sint") return F::RG16Sint;
-            if (s == "rg16float") return F::RG16Float;
-            if (s == "rgba8unorm") return F::RGBA8Unorm;
-            if (s == "rgba8unorm-srgb") return F::RGBA8UnormSrgb;
-            if (s == "rgba8snorm") return F::RGBA8Snorm;
-            if (s == "rgba8uint") return F::RGBA8Uint;
-            if (s == "rgba8sint") return F::RGBA8Sint;
-            if (s == "bgra8unorm") return F::BGRA8Unorm;
-            if (s == "bgra8unorm-srgb") return F::BGRA8UnormSrgb;
-            if (s == "rgb9e5ufloat") return F::RGB9E5Ufloat;
-            if (s == "rgb10a2uint") return F::RGB10A2Uint;
-            if (s == "rgb10a2unorm") return F::RGB10A2Unorm;
-            if (s == "rg11b10ufloat") return F::RG11B10Ufloat;
-            if (s == "rg32uint") return F::RG32Uint;
-            if (s == "rg32sint") return F::RG32Sint;
-            if (s == "rg32float") return F::RG32Float;
-            if (s == "rgba16uint") return F::RGBA16Uint;
-            if (s == "rgba16sint") return F::RGBA16Sint;
-            if (s == "rgba16float") return F::RGBA16Float;
-            if (s == "rgba32uint") return F::RGBA32Uint;
-            if (s == "rgba32sint") return F::RGBA32Sint;
-            if (s == "rgba32float") return F::RGBA32Float;
-            if (s == "stencil8") return F::Stencil8;
-            if (s == "depth16unorm") return F::Depth16Unorm;
-            if (s == "depth24plus") return F::Depth24Plus;
-            if (s == "depth24plus-stencil8") return F::Depth24PlusStencil8;
-            if (s == "depth32float") return F::Depth32Float;
-            if (s == "depth32float-stencil8") return F::Depth32FloatStencil8;
-            if (s == "bc1-rgba-unorm") return F::BC1RGBAUnorm;
-            if (s == "bc1-rgba-unorm-srgb") return F::BC1RGBAUnormSrgb;
-            if (s == "bc2-rgba-unorm") return F::BC2RGBAUnorm;
-            if (s == "bc2-rgba-unorm-srgb") return F::BC2RGBAUnormSrgb;
-            if (s == "bc3-rgba-unorm") return F::BC3RGBAUnorm;
-            if (s == "bc3-rgba-unorm-srgb") return F::BC3RGBAUnormSrgb;
-            if (s == "bc4-r-unorm") return F::BC4RUnorm;
-            if (s == "bc4-r-snorm") return F::BC4RSnorm;
-            if (s == "bc5-rg-unorm") return F::BC5RGUnorm;
-            if (s == "bc5-rg-snorm") return F::BC5RGSnorm;
-            if (s == "bc6h-rgb-ufloat") return F::BC6HRGBUfloat;
-            if (s == "bc6h-rgb-float") return F::BC6HRGBFloat;
-            if (s == "bc7-rgba-unorm") return F::BC7RGBAUnorm;
-            if (s == "bc7-rgba-unorm-srgb") return F::BC7RGBAUnormSrgb;
-            return F::Undefined;
+            if (s == "r8unorm") return WGPUTextureFormat_R8Unorm;
+            if (s == "r8snorm") return WGPUTextureFormat_R8Snorm;
+            if (s == "r8uint") return WGPUTextureFormat_R8Uint;
+            if (s == "r8sint") return WGPUTextureFormat_R8Sint;
+            if (s == "r16uint") return WGPUTextureFormat_R16Uint;
+            if (s == "r16sint") return WGPUTextureFormat_R16Sint;
+            if (s == "r16float") return WGPUTextureFormat_R16Float;
+            if (s == "rg8unorm") return WGPUTextureFormat_RG8Unorm;
+            if (s == "rg8snorm") return WGPUTextureFormat_RG8Snorm;
+            if (s == "rg8uint") return WGPUTextureFormat_RG8Uint;
+            if (s == "rg8sint") return WGPUTextureFormat_RG8Sint;
+            if (s == "r32uint") return WGPUTextureFormat_R32Uint;
+            if (s == "r32sint") return WGPUTextureFormat_R32Sint;
+            if (s == "r32float") return WGPUTextureFormat_R32Float;
+            if (s == "rg16uint") return WGPUTextureFormat_RG16Uint;
+            if (s == "rg16sint") return WGPUTextureFormat_RG16Sint;
+            if (s == "rg16float") return WGPUTextureFormat_RG16Float;
+            if (s == "rgba8unorm") return WGPUTextureFormat_RGBA8Unorm;
+            if (s == "rgba8unorm-srgb") return WGPUTextureFormat_RGBA8UnormSrgb;
+            if (s == "rgba8snorm") return WGPUTextureFormat_RGBA8Snorm;
+            if (s == "rgba8uint") return WGPUTextureFormat_RGBA8Uint;
+            if (s == "rgba8sint") return WGPUTextureFormat_RGBA8Sint;
+            if (s == "bgra8unorm") return WGPUTextureFormat_BGRA8Unorm;
+            if (s == "bgra8unorm-srgb") return WGPUTextureFormat_BGRA8UnormSrgb;
+            if (s == "rgb9e5ufloat") return WGPUTextureFormat_RGB9E5Ufloat;
+            if (s == "rgb10a2uint") return WGPUTextureFormat_RGB10A2Uint;
+            if (s == "rgb10a2unorm") return WGPUTextureFormat_RGB10A2Unorm;
+            if (s == "rg11b10ufloat") return WGPUTextureFormat_RG11B10Ufloat;
+            if (s == "rg32uint") return WGPUTextureFormat_RG32Uint;
+            if (s == "rg32sint") return WGPUTextureFormat_RG32Sint;
+            if (s == "rg32float") return WGPUTextureFormat_RG32Float;
+            if (s == "rgba16uint") return WGPUTextureFormat_RGBA16Uint;
+            if (s == "rgba16sint") return WGPUTextureFormat_RGBA16Sint;
+            if (s == "rgba16float") return WGPUTextureFormat_RGBA16Float;
+            if (s == "rgba32uint") return WGPUTextureFormat_RGBA32Uint;
+            if (s == "rgba32sint") return WGPUTextureFormat_RGBA32Sint;
+            if (s == "rgba32float") return WGPUTextureFormat_RGBA32Float;
+            if (s == "stencil8") return WGPUTextureFormat_Stencil8;
+            if (s == "depth16unorm") return WGPUTextureFormat_Depth16Unorm;
+            if (s == "depth24plus") return WGPUTextureFormat_Depth24Plus;
+            if (s == "depth24plus-stencil8") return WGPUTextureFormat_Depth24PlusStencil8;
+            if (s == "depth32float") return WGPUTextureFormat_Depth32Float;
+            if (s == "depth32float-stencil8") return WGPUTextureFormat_Depth32FloatStencil8;
+            if (s == "bc1-rgba-unorm") return WGPUTextureFormat_BC1RGBAUnorm;
+            if (s == "bc1-rgba-unorm-srgb") return WGPUTextureFormat_BC1RGBAUnormSrgb;
+            if (s == "bc2-rgba-unorm") return WGPUTextureFormat_BC2RGBAUnorm;
+            if (s == "bc2-rgba-unorm-srgb") return WGPUTextureFormat_BC2RGBAUnormSrgb;
+            if (s == "bc3-rgba-unorm") return WGPUTextureFormat_BC3RGBAUnorm;
+            if (s == "bc3-rgba-unorm-srgb") return WGPUTextureFormat_BC3RGBAUnormSrgb;
+            if (s == "bc4-r-unorm") return WGPUTextureFormat_BC4RUnorm;
+            if (s == "bc4-r-snorm") return WGPUTextureFormat_BC4RSnorm;
+            if (s == "bc5-rg-unorm") return WGPUTextureFormat_BC5RGUnorm;
+            if (s == "bc5-rg-snorm") return WGPUTextureFormat_BC5RGSnorm;
+            if (s == "bc6h-rgb-ufloat") return WGPUTextureFormat_BC6HRGBUfloat;
+            if (s == "bc6h-rgb-float") return WGPUTextureFormat_BC6HRGBFloat;
+            if (s == "bc7-rgba-unorm") return WGPUTextureFormat_BC7RGBAUnorm;
+            if (s == "bc7-rgba-unorm-srgb") return WGPUTextureFormat_BC7RGBAUnormSrgb;
+            return WGPUTextureFormat_Undefined;
         }
-        const char* textureFormatStr(wgpu::TextureFormat f)
+        const char* textureFormatStr(WGPUTextureFormat f)
         {
-            using F = wgpu::TextureFormat;
             switch (f)
             {
-            case F::R8Unorm: return "r8unorm";
-            case F::R8Snorm: return "r8snorm";
-            case F::R8Uint: return "r8uint";
-            case F::R8Sint: return "r8sint";
-            case F::R16Uint: return "r16uint";
-            case F::R16Sint: return "r16sint";
-            case F::R16Float: return "r16float";
-            case F::RG8Unorm: return "rg8unorm";
-            case F::RG8Snorm: return "rg8snorm";
-            case F::RG8Uint: return "rg8uint";
-            case F::RG8Sint: return "rg8sint";
-            case F::R32Uint: return "r32uint";
-            case F::R32Sint: return "r32sint";
-            case F::R32Float: return "r32float";
-            case F::RG16Uint: return "rg16uint";
-            case F::RG16Sint: return "rg16sint";
-            case F::RG16Float: return "rg16float";
-            case F::RGBA8Unorm: return "rgba8unorm";
-            case F::RGBA8UnormSrgb: return "rgba8unorm-srgb";
-            case F::RGBA8Snorm: return "rgba8snorm";
-            case F::RGBA8Uint: return "rgba8uint";
-            case F::RGBA8Sint: return "rgba8sint";
-            case F::BGRA8Unorm: return "bgra8unorm";
-            case F::BGRA8UnormSrgb: return "bgra8unorm-srgb";
-            case F::RGB9E5Ufloat: return "rgb9e5ufloat";
-            case F::RGB10A2Uint: return "rgb10a2uint";
-            case F::RGB10A2Unorm: return "rgb10a2unorm";
-            case F::RG11B10Ufloat: return "rg11b10ufloat";
-            case F::RG32Uint: return "rg32uint";
-            case F::RG32Sint: return "rg32sint";
-            case F::RG32Float: return "rg32float";
-            case F::RGBA16Uint: return "rgba16uint";
-            case F::RGBA16Sint: return "rgba16sint";
-            case F::RGBA16Float: return "rgba16float";
-            case F::RGBA32Uint: return "rgba32uint";
-            case F::RGBA32Sint: return "rgba32sint";
-            case F::RGBA32Float: return "rgba32float";
-            case F::Stencil8: return "stencil8";
-            case F::Depth16Unorm: return "depth16unorm";
-            case F::Depth24Plus: return "depth24plus";
-            case F::Depth24PlusStencil8: return "depth24plus-stencil8";
-            case F::Depth32Float: return "depth32float";
-            case F::Depth32FloatStencil8: return "depth32float-stencil8";
+            case WGPUTextureFormat_R8Unorm: return "r8unorm";
+            case WGPUTextureFormat_R8Snorm: return "r8snorm";
+            case WGPUTextureFormat_R8Uint: return "r8uint";
+            case WGPUTextureFormat_R8Sint: return "r8sint";
+            case WGPUTextureFormat_R16Uint: return "r16uint";
+            case WGPUTextureFormat_R16Sint: return "r16sint";
+            case WGPUTextureFormat_R16Float: return "r16float";
+            case WGPUTextureFormat_RG8Unorm: return "rg8unorm";
+            case WGPUTextureFormat_RG8Snorm: return "rg8snorm";
+            case WGPUTextureFormat_RG8Uint: return "rg8uint";
+            case WGPUTextureFormat_RG8Sint: return "rg8sint";
+            case WGPUTextureFormat_R32Uint: return "r32uint";
+            case WGPUTextureFormat_R32Sint: return "r32sint";
+            case WGPUTextureFormat_R32Float: return "r32float";
+            case WGPUTextureFormat_RG16Uint: return "rg16uint";
+            case WGPUTextureFormat_RG16Sint: return "rg16sint";
+            case WGPUTextureFormat_RG16Float: return "rg16float";
+            case WGPUTextureFormat_RGBA8Unorm: return "rgba8unorm";
+            case WGPUTextureFormat_RGBA8UnormSrgb: return "rgba8unorm-srgb";
+            case WGPUTextureFormat_RGBA8Snorm: return "rgba8snorm";
+            case WGPUTextureFormat_RGBA8Uint: return "rgba8uint";
+            case WGPUTextureFormat_RGBA8Sint: return "rgba8sint";
+            case WGPUTextureFormat_BGRA8Unorm: return "bgra8unorm";
+            case WGPUTextureFormat_BGRA8UnormSrgb: return "bgra8unorm-srgb";
+            case WGPUTextureFormat_RGB9E5Ufloat: return "rgb9e5ufloat";
+            case WGPUTextureFormat_RGB10A2Uint: return "rgb10a2uint";
+            case WGPUTextureFormat_RGB10A2Unorm: return "rgb10a2unorm";
+            case WGPUTextureFormat_RG11B10Ufloat: return "rg11b10ufloat";
+            case WGPUTextureFormat_RG32Uint: return "rg32uint";
+            case WGPUTextureFormat_RG32Sint: return "rg32sint";
+            case WGPUTextureFormat_RG32Float: return "rg32float";
+            case WGPUTextureFormat_RGBA16Uint: return "rgba16uint";
+            case WGPUTextureFormat_RGBA16Sint: return "rgba16sint";
+            case WGPUTextureFormat_RGBA16Float: return "rgba16float";
+            case WGPUTextureFormat_RGBA32Uint: return "rgba32uint";
+            case WGPUTextureFormat_RGBA32Sint: return "rgba32sint";
+            case WGPUTextureFormat_RGBA32Float: return "rgba32float";
+            case WGPUTextureFormat_Stencil8: return "stencil8";
+            case WGPUTextureFormat_Depth16Unorm: return "depth16unorm";
+            case WGPUTextureFormat_Depth24Plus: return "depth24plus";
+            case WGPUTextureFormat_Depth24PlusStencil8: return "depth24plus-stencil8";
+            case WGPUTextureFormat_Depth32Float: return "depth32float";
+            case WGPUTextureFormat_Depth32FloatStencil8: return "depth32float-stencil8";
             default: return "bgra8unorm";
             }
         }
-        wgpu::VertexFormat vertexFormat(const std::string& s)
+        WGPUVertexFormat vertexFormat(const std::string& s)
         {
-            using F = wgpu::VertexFormat;
-            if (s == "uint8x2") return F::Uint8x2;
-            if (s == "uint8x4") return F::Uint8x4;
-            if (s == "sint8x2") return F::Sint8x2;
-            if (s == "sint8x4") return F::Sint8x4;
-            if (s == "unorm8x2") return F::Unorm8x2;
-            if (s == "unorm8x4") return F::Unorm8x4;
-            if (s == "snorm8x2") return F::Snorm8x2;
-            if (s == "snorm8x4") return F::Snorm8x4;
-            if (s == "uint16x2") return F::Uint16x2;
-            if (s == "uint16x4") return F::Uint16x4;
-            if (s == "sint16x2") return F::Sint16x2;
-            if (s == "sint16x4") return F::Sint16x4;
-            if (s == "unorm16x2") return F::Unorm16x2;
-            if (s == "unorm16x4") return F::Unorm16x4;
-            if (s == "snorm16x2") return F::Snorm16x2;
-            if (s == "snorm16x4") return F::Snorm16x4;
-            if (s == "float16x2") return F::Float16x2;
-            if (s == "float16x4") return F::Float16x4;
-            if (s == "float32") return F::Float32;
-            if (s == "float32x2") return F::Float32x2;
-            if (s == "float32x3") return F::Float32x3;
-            if (s == "float32x4") return F::Float32x4;
-            if (s == "uint32") return F::Uint32;
-            if (s == "uint32x2") return F::Uint32x2;
-            if (s == "uint32x3") return F::Uint32x3;
-            if (s == "uint32x4") return F::Uint32x4;
-            if (s == "sint32") return F::Sint32;
-            if (s == "sint32x2") return F::Sint32x2;
-            if (s == "sint32x3") return F::Sint32x3;
-            if (s == "sint32x4") return F::Sint32x4;
-            return F::Float32;
+            if (s == "uint8x2") return WGPUVertexFormat_Uint8x2;
+            if (s == "uint8x4") return WGPUVertexFormat_Uint8x4;
+            if (s == "sint8x2") return WGPUVertexFormat_Sint8x2;
+            if (s == "sint8x4") return WGPUVertexFormat_Sint8x4;
+            if (s == "unorm8x2") return WGPUVertexFormat_Unorm8x2;
+            if (s == "unorm8x4") return WGPUVertexFormat_Unorm8x4;
+            if (s == "snorm8x2") return WGPUVertexFormat_Snorm8x2;
+            if (s == "snorm8x4") return WGPUVertexFormat_Snorm8x4;
+            if (s == "uint16x2") return WGPUVertexFormat_Uint16x2;
+            if (s == "uint16x4") return WGPUVertexFormat_Uint16x4;
+            if (s == "sint16x2") return WGPUVertexFormat_Sint16x2;
+            if (s == "sint16x4") return WGPUVertexFormat_Sint16x4;
+            if (s == "unorm16x2") return WGPUVertexFormat_Unorm16x2;
+            if (s == "unorm16x4") return WGPUVertexFormat_Unorm16x4;
+            if (s == "snorm16x2") return WGPUVertexFormat_Snorm16x2;
+            if (s == "snorm16x4") return WGPUVertexFormat_Snorm16x4;
+            if (s == "float16x2") return WGPUVertexFormat_Float16x2;
+            if (s == "float16x4") return WGPUVertexFormat_Float16x4;
+            if (s == "float32") return WGPUVertexFormat_Float32;
+            if (s == "float32x2") return WGPUVertexFormat_Float32x2;
+            if (s == "float32x3") return WGPUVertexFormat_Float32x3;
+            if (s == "float32x4") return WGPUVertexFormat_Float32x4;
+            if (s == "uint32") return WGPUVertexFormat_Uint32;
+            if (s == "uint32x2") return WGPUVertexFormat_Uint32x2;
+            if (s == "uint32x3") return WGPUVertexFormat_Uint32x3;
+            if (s == "uint32x4") return WGPUVertexFormat_Uint32x4;
+            if (s == "sint32") return WGPUVertexFormat_Sint32;
+            if (s == "sint32x2") return WGPUVertexFormat_Sint32x2;
+            if (s == "sint32x3") return WGPUVertexFormat_Sint32x3;
+            if (s == "sint32x4") return WGPUVertexFormat_Sint32x4;
+            return WGPUVertexFormat_Float32;
         }
-        wgpu::IndexFormat indexFormat(const std::string& s)
+        WGPUIndexFormat indexFormat(const std::string& s)
         {
-            if (s == "uint16") return wgpu::IndexFormat::Uint16;
-            if (s == "uint32") return wgpu::IndexFormat::Uint32;
-            return wgpu::IndexFormat::Undefined;
+            if (s == "uint16") return WGPUIndexFormat_Uint16;
+            if (s == "uint32") return WGPUIndexFormat_Uint32;
+            return WGPUIndexFormat_Undefined;
         }
-        wgpu::PrimitiveTopology primitiveTopology(const std::string& s)
+        WGPUPrimitiveTopology primitiveTopology(const std::string& s)
         {
-            using T = wgpu::PrimitiveTopology;
-            if (s == "point-list") return T::PointList;
-            if (s == "line-list") return T::LineList;
-            if (s == "line-strip") return T::LineStrip;
-            if (s == "triangle-list") return T::TriangleList;
-            if (s == "triangle-strip") return T::TriangleStrip;
-            return T::TriangleList;
+            if (s == "point-list") return WGPUPrimitiveTopology_PointList;
+            if (s == "line-list") return WGPUPrimitiveTopology_LineList;
+            if (s == "line-strip") return WGPUPrimitiveTopology_LineStrip;
+            if (s == "triangle-list") return WGPUPrimitiveTopology_TriangleList;
+            if (s == "triangle-strip") return WGPUPrimitiveTopology_TriangleStrip;
+            return WGPUPrimitiveTopology_TriangleList;
         }
-        wgpu::CullMode cullMode(const std::string& s)
+        WGPUCullMode cullMode(const std::string& s)
         {
-            if (s == "none") return wgpu::CullMode::None;
-            if (s == "front") return wgpu::CullMode::Front;
-            if (s == "back") return wgpu::CullMode::Back;
-            return wgpu::CullMode::None;
+            if (s == "none") return WGPUCullMode_None;
+            if (s == "front") return WGPUCullMode_Front;
+            if (s == "back") return WGPUCullMode_Back;
+            return WGPUCullMode_None;
         }
-        wgpu::FrontFace frontFace(const std::string& s)
+        WGPUFrontFace frontFace(const std::string& s)
         {
-            if (s == "cw") return wgpu::FrontFace::CW;
-            if (s == "ccw") return wgpu::FrontFace::CCW;
-            return wgpu::FrontFace::CCW;
+            if (s == "cw") return WGPUFrontFace_CW;
+            if (s == "ccw") return WGPUFrontFace_CCW;
+            return WGPUFrontFace_CCW;
         }
-        wgpu::CompareFunction compareFunction(const std::string& s)
+        WGPUCompareFunction compareFunction(const std::string& s)
         {
-            using C = wgpu::CompareFunction;
-            if (s == "never") return C::Never;
-            if (s == "less") return C::Less;
-            if (s == "equal") return C::Equal;
-            if (s == "less-equal") return C::LessEqual;
-            if (s == "greater") return C::Greater;
-            if (s == "not-equal") return C::NotEqual;
-            if (s == "greater-equal") return C::GreaterEqual;
-            if (s == "always") return C::Always;
-            return C::Undefined;
+            if (s == "never") return WGPUCompareFunction_Never;
+            if (s == "less") return WGPUCompareFunction_Less;
+            if (s == "equal") return WGPUCompareFunction_Equal;
+            if (s == "less-equal") return WGPUCompareFunction_LessEqual;
+            if (s == "greater") return WGPUCompareFunction_Greater;
+            if (s == "not-equal") return WGPUCompareFunction_NotEqual;
+            if (s == "greater-equal") return WGPUCompareFunction_GreaterEqual;
+            if (s == "always") return WGPUCompareFunction_Always;
+            return WGPUCompareFunction_Undefined;
         }
-        wgpu::StencilOperation stencilOperation(const std::string& s)
+        WGPUStencilOperation stencilOperation(const std::string& s)
         {
-            using O = wgpu::StencilOperation;
-            if (s == "keep") return O::Keep;
-            if (s == "zero") return O::Zero;
-            if (s == "replace") return O::Replace;
-            if (s == "invert") return O::Invert;
-            if (s == "increment-clamp") return O::IncrementClamp;
-            if (s == "decrement-clamp") return O::DecrementClamp;
-            if (s == "increment-wrap") return O::IncrementWrap;
-            if (s == "decrement-wrap") return O::DecrementWrap;
-            return O::Keep;
+            if (s == "keep") return WGPUStencilOperation_Keep;
+            if (s == "zero") return WGPUStencilOperation_Zero;
+            if (s == "replace") return WGPUStencilOperation_Replace;
+            if (s == "invert") return WGPUStencilOperation_Invert;
+            if (s == "increment-clamp") return WGPUStencilOperation_IncrementClamp;
+            if (s == "decrement-clamp") return WGPUStencilOperation_DecrementClamp;
+            if (s == "increment-wrap") return WGPUStencilOperation_IncrementWrap;
+            if (s == "decrement-wrap") return WGPUStencilOperation_DecrementWrap;
+            return WGPUStencilOperation_Keep;
         }
-        wgpu::BlendFactor blendFactor(const std::string& s)
+        WGPUBlendFactor blendFactor(const std::string& s)
         {
-            using B = wgpu::BlendFactor;
-            if (s == "zero") return B::Zero;
-            if (s == "one") return B::One;
-            if (s == "src") return B::Src;
-            if (s == "one-minus-src") return B::OneMinusSrc;
-            if (s == "src-alpha") return B::SrcAlpha;
-            if (s == "one-minus-src-alpha") return B::OneMinusSrcAlpha;
-            if (s == "dst") return B::Dst;
-            if (s == "one-minus-dst") return B::OneMinusDst;
-            if (s == "dst-alpha") return B::DstAlpha;
-            if (s == "one-minus-dst-alpha") return B::OneMinusDstAlpha;
-            if (s == "src-alpha-saturated") return B::SrcAlphaSaturated;
-            if (s == "constant") return B::Constant;
-            if (s == "one-minus-constant") return B::OneMinusConstant;
-            return B::One;
+            if (s == "zero") return WGPUBlendFactor_Zero;
+            if (s == "one") return WGPUBlendFactor_One;
+            if (s == "src") return WGPUBlendFactor_Src;
+            if (s == "one-minus-src") return WGPUBlendFactor_OneMinusSrc;
+            if (s == "src-alpha") return WGPUBlendFactor_SrcAlpha;
+            if (s == "one-minus-src-alpha") return WGPUBlendFactor_OneMinusSrcAlpha;
+            if (s == "dst") return WGPUBlendFactor_Dst;
+            if (s == "one-minus-dst") return WGPUBlendFactor_OneMinusDst;
+            if (s == "dst-alpha") return WGPUBlendFactor_DstAlpha;
+            if (s == "one-minus-dst-alpha") return WGPUBlendFactor_OneMinusDstAlpha;
+            if (s == "src-alpha-saturated") return WGPUBlendFactor_SrcAlphaSaturated;
+            if (s == "constant") return WGPUBlendFactor_Constant;
+            if (s == "one-minus-constant") return WGPUBlendFactor_OneMinusConstant;
+            return WGPUBlendFactor_One;
         }
-        wgpu::BlendOperation blendOperation(const std::string& s)
+        WGPUBlendOperation blendOperation(const std::string& s)
         {
-            using O = wgpu::BlendOperation;
-            if (s == "add") return O::Add;
-            if (s == "subtract") return O::Subtract;
-            if (s == "reverse-subtract") return O::ReverseSubtract;
-            if (s == "min") return O::Min;
-            if (s == "max") return O::Max;
-            return O::Add;
+            if (s == "add") return WGPUBlendOperation_Add;
+            if (s == "subtract") return WGPUBlendOperation_Subtract;
+            if (s == "reverse-subtract") return WGPUBlendOperation_ReverseSubtract;
+            if (s == "min") return WGPUBlendOperation_Min;
+            if (s == "max") return WGPUBlendOperation_Max;
+            return WGPUBlendOperation_Add;
         }
-        wgpu::AddressMode addressMode(const std::string& s)
+        WGPUAddressMode addressMode(const std::string& s)
         {
-            if (s == "clamp-to-edge") return wgpu::AddressMode::ClampToEdge;
-            if (s == "repeat") return wgpu::AddressMode::Repeat;
-            if (s == "mirror-repeat") return wgpu::AddressMode::MirrorRepeat;
-            return wgpu::AddressMode::ClampToEdge;
+            if (s == "clamp-to-edge") return WGPUAddressMode_ClampToEdge;
+            if (s == "repeat") return WGPUAddressMode_Repeat;
+            if (s == "mirror-repeat") return WGPUAddressMode_MirrorRepeat;
+            return WGPUAddressMode_ClampToEdge;
         }
-        wgpu::FilterMode filterMode(const std::string& s)
+        WGPUFilterMode filterMode(const std::string& s)
         {
-            if (s == "nearest") return wgpu::FilterMode::Nearest;
-            if (s == "linear") return wgpu::FilterMode::Linear;
-            return wgpu::FilterMode::Nearest;
+            if (s == "nearest") return WGPUFilterMode_Nearest;
+            if (s == "linear") return WGPUFilterMode_Linear;
+            return WGPUFilterMode_Nearest;
         }
-        wgpu::MipmapFilterMode mipmapFilterMode(const std::string& s)
+        WGPUMipmapFilterMode mipmapFilterMode(const std::string& s)
         {
-            if (s == "nearest") return wgpu::MipmapFilterMode::Nearest;
-            if (s == "linear") return wgpu::MipmapFilterMode::Linear;
-            return wgpu::MipmapFilterMode::Nearest;
+            if (s == "nearest") return WGPUMipmapFilterMode_Nearest;
+            if (s == "linear") return WGPUMipmapFilterMode_Linear;
+            return WGPUMipmapFilterMode_Nearest;
         }
-        wgpu::TextureViewDimension textureViewDimension(const std::string& s)
+        WGPUTextureViewDimension textureViewDimension(const std::string& s)
         {
-            using D = wgpu::TextureViewDimension;
-            if (s == "1d") return D::e1D;
-            if (s == "2d") return D::e2D;
-            if (s == "2d-array") return D::e2DArray;
-            if (s == "cube") return D::Cube;
-            if (s == "cube-array") return D::CubeArray;
-            if (s == "3d") return D::e3D;
-            return D::Undefined;
+            if (s == "1d") return WGPUTextureViewDimension_1D;
+            if (s == "2d") return WGPUTextureViewDimension_2D;
+            if (s == "2d-array") return WGPUTextureViewDimension_2DArray;
+            if (s == "cube") return WGPUTextureViewDimension_Cube;
+            if (s == "cube-array") return WGPUTextureViewDimension_CubeArray;
+            if (s == "3d") return WGPUTextureViewDimension_3D;
+            return WGPUTextureViewDimension_Undefined;
         }
-        wgpu::TextureDimension textureDimension(const std::string& s)
+        WGPUTextureDimension textureDimension(const std::string& s)
         {
-            using D = wgpu::TextureDimension;
-            if (s == "1d") return D::e1D;
-            if (s == "2d") return D::e2D;
-            if (s == "3d") return D::e3D;
-            return D::e2D;
+            if (s == "1d") return WGPUTextureDimension_1D;
+            if (s == "2d") return WGPUTextureDimension_2D;
+            if (s == "3d") return WGPUTextureDimension_3D;
+            return WGPUTextureDimension_2D;
         }
-        wgpu::TextureSampleType textureSampleType(const std::string& s)
+        WGPUTextureSampleType textureSampleType(const std::string& s)
         {
-            using T = wgpu::TextureSampleType;
-            if (s == "float") return T::Float;
-            if (s == "unfilterable-float") return T::UnfilterableFloat;
-            if (s == "depth") return T::Depth;
-            if (s == "sint") return T::Sint;
-            if (s == "uint") return T::Uint;
-            return T::Float;
+            if (s == "float") return WGPUTextureSampleType_Float;
+            if (s == "unfilterable-float") return WGPUTextureSampleType_UnfilterableFloat;
+            if (s == "depth") return WGPUTextureSampleType_Depth;
+            if (s == "sint") return WGPUTextureSampleType_Sint;
+            if (s == "uint") return WGPUTextureSampleType_Uint;
+            return WGPUTextureSampleType_Float;
         }
-        wgpu::StorageTextureAccess storageTextureAccess(const std::string& s)
+        WGPUStorageTextureAccess storageTextureAccess(const std::string& s)
         {
-            using A = wgpu::StorageTextureAccess;
-            if (s == "write-only") return A::WriteOnly;
-            if (s == "read-only") return A::ReadOnly;
-            if (s == "read-write") return A::ReadWrite;
-            return A::Undefined;
+            if (s == "write-only") return WGPUStorageTextureAccess_WriteOnly;
+            if (s == "read-only") return WGPUStorageTextureAccess_ReadOnly;
+            if (s == "read-write") return WGPUStorageTextureAccess_ReadWrite;
+            return WGPUStorageTextureAccess_Undefined;
         }
-        wgpu::SamplerBindingType samplerBindingType(const std::string& s)
+        WGPUSamplerBindingType samplerBindingType(const std::string& s)
         {
-            using S = wgpu::SamplerBindingType;
-            if (s == "filtering") return S::Filtering;
-            if (s == "non-filtering") return S::NonFiltering;
-            if (s == "comparison") return S::Comparison;
-            return S::Filtering;
+            if (s == "filtering") return WGPUSamplerBindingType_Filtering;
+            if (s == "non-filtering") return WGPUSamplerBindingType_NonFiltering;
+            if (s == "comparison") return WGPUSamplerBindingType_Comparison;
+            return WGPUSamplerBindingType_Filtering;
         }
-        wgpu::BufferBindingType bufferBindingType(const std::string& s)
+        WGPUBufferBindingType bufferBindingType(const std::string& s)
         {
-            using B = wgpu::BufferBindingType;
-            if (s == "uniform") return B::Uniform;
-            if (s == "storage") return B::Storage;
-            if (s == "read-only-storage") return B::ReadOnlyStorage;
-            return B::Uniform;
+            if (s == "uniform") return WGPUBufferBindingType_Uniform;
+            if (s == "storage") return WGPUBufferBindingType_Storage;
+            if (s == "read-only-storage") return WGPUBufferBindingType_ReadOnlyStorage;
+            return WGPUBufferBindingType_Uniform;
         }
-        wgpu::LoadOp loadOp(const std::string& s)
+        WGPULoadOp loadOp(const std::string& s)
         {
-            if (s == "load") return wgpu::LoadOp::Load;
-            if (s == "clear") return wgpu::LoadOp::Clear;
-            return wgpu::LoadOp::Load;
+            if (s == "load") return WGPULoadOp_Load;
+            if (s == "clear") return WGPULoadOp_Clear;
+            return WGPULoadOp_Load;
         }
-        wgpu::StoreOp storeOp(const std::string& s)
+        WGPUStoreOp storeOp(const std::string& s)
         {
-            if (s == "store") return wgpu::StoreOp::Store;
-            if (s == "discard") return wgpu::StoreOp::Discard;
-            return wgpu::StoreOp::Store;
+            if (s == "store") return WGPUStoreOp_Store;
+            if (s == "discard") return WGPUStoreOp_Discard;
+            return WGPUStoreOp_Store;
         }
-        wgpu::VertexStepMode vertexStepMode(const std::string& s)
+        WGPUVertexStepMode vertexStepMode(const std::string& s)
         {
-            if (s == "vertex") return wgpu::VertexStepMode::Vertex;
-            if (s == "instance") return wgpu::VertexStepMode::Instance;
-            return wgpu::VertexStepMode::Vertex;
+            if (s == "vertex") return WGPUVertexStepMode_Vertex;
+            if (s == "instance") return WGPUVertexStepMode_Instance;
+            return WGPUVertexStepMode_Vertex;
         }
-        wgpu::FeatureName featureName(const std::string& s)
+        WGPUFeatureName featureName(const std::string& s)
         {
-            using F = wgpu::FeatureName;
-            if (s == "depth-clip-control") return F::DepthClipControl;
-            if (s == "depth32float-stencil8") return F::Depth32FloatStencil8;
-            if (s == "texture-compression-bc") return F::TextureCompressionBC;
-            if (s == "texture-compression-etc2") return F::TextureCompressionETC2;
-            if (s == "texture-compression-astc") return F::TextureCompressionASTC;
-            if (s == "timestamp-query") return F::TimestampQuery;
-            if (s == "indirect-first-instance") return F::IndirectFirstInstance;
-            if (s == "shader-f16") return F::ShaderF16;
-            if (s == "rg11b10ufloat-renderable") return F::RG11B10UfloatRenderable;
-            if (s == "bgra8unorm-storage") return F::BGRA8UnormStorage;
-            if (s == "float32-filterable") return F::Float32Filterable;
-            if (s == "dual-source-blending") return F::DualSourceBlending;
-            return F(0);
+            if (s == "depth-clip-control") return WGPUFeatureName_DepthClipControl;
+            if (s == "depth32float-stencil8") return WGPUFeatureName_Depth32FloatStencil8;
+            if (s == "texture-compression-bc") return WGPUFeatureName_TextureCompressionBC;
+            if (s == "texture-compression-etc2") return WGPUFeatureName_TextureCompressionETC2;
+            if (s == "texture-compression-astc") return WGPUFeatureName_TextureCompressionASTC;
+            if (s == "timestamp-query") return WGPUFeatureName_TimestampQuery;
+            if (s == "indirect-first-instance") return WGPUFeatureName_IndirectFirstInstance;
+            if (s == "shader-f16") return WGPUFeatureName_ShaderF16;
+            if (s == "rg11b10ufloat-renderable") return WGPUFeatureName_RG11B10UfloatRenderable;
+            if (s == "bgra8unorm-storage") return WGPUFeatureName_BGRA8UnormStorage;
+            if (s == "float32-filterable") return WGPUFeatureName_Float32Filterable;
+            if (s == "dual-source-blending") return WGPUFeatureName_DualSourceBlending;
+            return WGPUFeatureName(0);
         }
-        wgpu::QueryType queryType(const std::string& s)
+        WGPUQueryType queryType(const std::string& s)
         {
-            if (s == "occlusion") return wgpu::QueryType::Occlusion;
-            if (s == "timestamp") return wgpu::QueryType::Timestamp;
-            return wgpu::QueryType::Occlusion;
+            if (s == "occlusion") return WGPUQueryType_Occlusion;
+            if (s == "timestamp") return WGPUQueryType_Timestamp;
+            return WGPUQueryType_Occlusion;
         }
-        wgpu::PowerPreference powerPreference(const std::string& s)
+        WGPUPowerPreference powerPreference(const std::string& s)
         {
-            if (s == "low-power") return wgpu::PowerPreference::LowPower;
-            if (s == "high-performance") return wgpu::PowerPreference::HighPerformance;
-            return wgpu::PowerPreference::Undefined;
+            if (s == "low-power") return WGPUPowerPreference_LowPower;
+            if (s == "high-performance") return WGPUPowerPreference_HighPerformance;
+            return WGPUPowerPreference_Undefined;
         }
 
         // ---- limits ----------------------------------------------------------
-        void FillLimits(Napi::Object o, const wgpu::Limits& L)
+        void FillLimits(Napi::Object o, const WGPULimits& L)
         {
             Napi::Env env = o.Env();
             auto N = [&](const char* k, double v) { o.Set(k, Napi::Number::New(env, v)); };
@@ -1035,24 +1117,24 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeAdapter(Napi::Env env);
         Napi::Object MakeDevice(Napi::Env env);
         Napi::Object MakeQueue(Napi::Env env);
-        Napi::Object MakeBuffer(Napi::Env env, wgpu::Buffer h, uint64_t size, uint32_t usage, bool mapped);
-        Napi::Object MakeTexture(Napi::Env env, wgpu::Texture h, uint32_t w, uint32_t ht, uint32_t depth,
+        Napi::Object MakeBuffer(Napi::Env env, WGPUBuffer h, uint64_t size, uint32_t usage, bool mapped);
+        Napi::Object MakeTexture(Napi::Env env, WGPUTexture h, uint32_t w, uint32_t ht, uint32_t depth,
             uint32_t mip, uint32_t sample, const std::string& fmt, uint32_t usage, const std::string& dim);
-        Napi::Object MakeTextureView(Napi::Env env, wgpu::TextureView h);
-        Napi::Object MakeSampler(Napi::Env env, wgpu::Sampler h);
-        Napi::Object MakeBindGroupLayout(Napi::Env env, wgpu::BindGroupLayout h);
-        Napi::Object MakeBindGroup(Napi::Env env, wgpu::BindGroup h);
-        Napi::Object MakePipelineLayout(Napi::Env env, wgpu::PipelineLayout h);
-        Napi::Object MakeShaderModule(Napi::Env env, wgpu::ShaderModule h);
-        Napi::Object MakeRenderPipeline(Napi::Env env, wgpu::RenderPipeline h);
-        Napi::Object MakeComputePipeline(Napi::Env env, wgpu::ComputePipeline h);
-        Napi::Object MakeCommandEncoder(Napi::Env env, wgpu::CommandEncoder h);
-        Napi::Object MakeRenderPassEncoder(Napi::Env env, wgpu::RenderPassEncoder h);
-        Napi::Object MakeComputePassEncoder(Napi::Env env, wgpu::ComputePassEncoder h);
-        Napi::Object MakeRenderBundleEncoder(Napi::Env env, wgpu::RenderBundleEncoder h);
-        Napi::Object MakeRenderBundle(Napi::Env env, wgpu::RenderBundle h);
-        Napi::Object MakeCommandBuffer(Napi::Env env, wgpu::CommandBuffer h);
-        Napi::Object MakeQuerySet(Napi::Env env, wgpu::QuerySet h, uint32_t count);
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h);
+        Napi::Object MakeSampler(Napi::Env env, WGPUSampler h);
+        Napi::Object MakeBindGroupLayout(Napi::Env env, WGPUBindGroupLayout h);
+        Napi::Object MakeBindGroup(Napi::Env env, WGPUBindGroup h);
+        Napi::Object MakePipelineLayout(Napi::Env env, WGPUPipelineLayout h);
+        Napi::Object MakeShaderModule(Napi::Env env, WGPUShaderModule h);
+        Napi::Object MakeRenderPipeline(Napi::Env env, WGPURenderPipeline h);
+        Napi::Object MakeComputePipeline(Napi::Env env, WGPUComputePipeline h);
+        Napi::Object MakeCommandEncoder(Napi::Env env, WGPUCommandEncoder h);
+        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h);
+        Napi::Object MakeComputePassEncoder(Napi::Env env, WGPUComputePassEncoder h);
+        Napi::Object MakeRenderBundleEncoder(Napi::Env env, WGPURenderBundleEncoder h);
+        Napi::Object MakeRenderBundle(Napi::Env env, WGPURenderBundle h);
+        Napi::Object MakeCommandBuffer(Napi::Env env, WGPUCommandBuffer h);
+        Napi::Object MakeQuerySet(Napi::Env env, WGPUQuerySet h, uint32_t count);
         Napi::Object MakeCanvasContext(Napi::Env env);
         Napi::Object DoCreateRenderPipeline(Napi::Env env, Napi::Value descVal);
         Napi::Object DoCreateComputePipeline(Napi::Env env, Napi::Value descVal);
@@ -1097,7 +1179,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUBuffer -------------------------------------------------------
-        Napi::Object MakeBuffer(Napi::Env env, wgpu::Buffer h, uint64_t size, uint32_t usage, bool mapped)
+        Napi::Object MakeBuffer(Napi::Env env, WGPUBuffer h, uint64_t size, uint32_t usage, bool mapped)
         {
             Napi::Object o = NewGPUObject(env, "GPUBuffer");
             SetHandle(o, h);
@@ -1124,12 +1206,14 @@ namespace Babylon::Plugins::NativeDawn
                 Napi::Env env = info.Env();
                 uint32_t mode = ArgU32(info, 0, 0);
                 uint64_t offset = ArgU64(info, 1, 0);
-                uint64_t size = ArgIsUndef(info, 2) ? wgpu::kWholeMapSize : ArgU64(info, 2, 0);
+                uint64_t size = ArgIsUndef(info, 2) ? WGPU_WHOLE_MAP_SIZE : ArgU64(info, 2, 0);
                 auto d = Napi::Promise::Deferred::New(env);
-                wgpu::Future f = h.MapAsync(wgpu::MapMode(mode), static_cast<size_t>(offset),
-                    static_cast<size_t>(size), wgpu::CallbackMode::WaitAnyOnly,
-                    [](wgpu::MapAsyncStatus, wgpu::StringView) {});
-                g_state.instance.WaitAny(f, UINT64_MAX);
+                WGPUBufferMapCallbackInfo mapCb = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+                mapCb.mode = WGPUCallbackMode_WaitAnyOnly;
+                mapCb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void*, void*) {};
+                WGPUFuture f = wgpuBufferMapAsync(h, WGPUMapMode(mode), static_cast<size_t>(offset),
+                    static_cast<size_t>(size), mapCb);
+                WaitFuture(f);
                 d.Resolve(env.Undefined());
                 return d.Promise();
             });
@@ -1137,11 +1221,11 @@ namespace Babylon::Plugins::NativeDawn
                 Napi::Env env = info.Env();
                 uint64_t offset = ArgU64(info, 0, 0);
                 uint64_t size = ArgIsUndef(info, 1)
-                    ? (h.GetSize() - offset) : ArgU64(info, 1, 0);
+                    ? (wgpuBufferGetSize(h) - offset) : ArgU64(info, 1, 0);
                 Napi::ArrayBuffer ab = Napi::ArrayBuffer::New(env, static_cast<size_t>(size));
                 // Seed from Dawn's current mapped bytes so read-maps work. For a
                 // write/mappedAtCreation map the source is writable too.
-                const void* src = h.GetConstMappedRange(static_cast<size_t>(offset), static_cast<size_t>(size));
+                const void* src = wgpuBufferGetConstMappedRange(h, static_cast<size_t>(offset), static_cast<size_t>(size));
                 if (src != nullptr && size > 0)
                 {
                     std::memcpy(ab.Data(), src, static_cast<size_t>(size));
@@ -1155,7 +1239,7 @@ namespace Babylon::Plugins::NativeDawn
                 // references so the ArrayBuffers can be collected.
                 for (auto& r : *ranges)
                 {
-                    void* dst = h.GetMappedRange(static_cast<size_t>(r.offset), static_cast<size_t>(r.size));
+                    void* dst = wgpuBufferGetMappedRange(h, static_cast<size_t>(r.offset), static_cast<size_t>(r.size));
                     if (dst != nullptr && !r.ab.IsEmpty())
                     {
                         Napi::ArrayBuffer ab = r.ab.Value();
@@ -1167,20 +1251,24 @@ namespace Babylon::Plugins::NativeDawn
                     r.ab.Reset();
                 }
                 ranges->clear();
-                h.Unmap();
+                wgpuBufferUnmap(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "destroy", [h, ranges](const Napi::CallbackInfo& info) -> Napi::Value {
                 for (auto& r : *ranges) { r.ab.Reset(); }
                 ranges->clear();
-                DeferDestroy([h]() mutable { h.Destroy(); });
+                // The lambda holds a raw handle for a few frames; keep a strong
+                // reference so the object cannot be released by JS finalization
+                // before the deferred Destroy runs.
+                wgpuBufferAddRef(h);
+                DeferDestroy([h]() { wgpuBufferDestroy(h); wgpuBufferRelease(h); });
                 return info.Env().Undefined();
             });
             return o;
         }
 
         // ---- GPUTextureView --------------------------------------------------
-        Napi::Object MakeTextureView(Napi::Env env, wgpu::TextureView h)
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h)
         {
             Napi::Object o = NewGPUObject(env, "GPUTextureView");
             SetHandle(o, h);
@@ -1188,7 +1276,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUTexture ------------------------------------------------------
-        Napi::Object MakeTexture(Napi::Env env, wgpu::Texture h, uint32_t w, uint32_t ht, uint32_t depth,
+        Napi::Object MakeTexture(Napi::Env env, WGPUTexture h, uint32_t w, uint32_t ht, uint32_t depth,
             uint32_t mip, uint32_t sample, const std::string& fmt, uint32_t usage, const std::string& dim)
         {
             Napi::Object o = NewGPUObject(env, "GPUTexture");
@@ -1204,7 +1292,7 @@ namespace Babylon::Plugins::NativeDawn
 
             SetMethod(o, "createView", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::TextureViewDescriptor d{};
+                WGPUTextureViewDescriptor d = WGPU_TEXTURE_VIEW_DESCRIPTOR_INIT;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     Napi::Object desc = info[0].As<Napi::Object>();
@@ -1215,22 +1303,23 @@ namespace Babylon::Plugins::NativeDawn
                     d.baseArrayLayer = PropU32(desc, "baseArrayLayer", 0);
                     if (PropPresent(desc, "arrayLayerCount")) d.arrayLayerCount = PropU32(desc, "arrayLayerCount", 0);
                     std::string aspect = PropStr(desc, "aspect");
-                    if (aspect == "stencil-only") d.aspect = wgpu::TextureAspect::StencilOnly;
-                    else if (aspect == "depth-only") d.aspect = wgpu::TextureAspect::DepthOnly;
-                    else d.aspect = wgpu::TextureAspect::All;
-                    if (PropPresent(desc, "usage")) d.usage = wgpu::TextureUsage(PropU32(desc, "usage", 0));
+                    if (aspect == "stencil-only") d.aspect = WGPUTextureAspect_StencilOnly;
+                    else if (aspect == "depth-only") d.aspect = WGPUTextureAspect_DepthOnly;
+                    else d.aspect = WGPUTextureAspect_All;
+                    if (PropPresent(desc, "usage")) d.usage = WGPUTextureUsage(PropU32(desc, "usage", 0));
                 }
-                return MakeTextureView(env, h.CreateView(&d));
+                return MakeTextureView(env, wgpuTextureCreateView(h, &d));
             });
             SetMethod(o, "destroy", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                DeferDestroy([h]() mutable { h.Destroy(); });
+                wgpuTextureAddRef(h);
+                DeferDestroy([h]() { wgpuTextureDestroy(h); wgpuTextureRelease(h); });
                 return info.Env().Undefined();
             });
             return o;
         }
 
         // ---- GPUSampler ------------------------------------------------------
-        Napi::Object MakeSampler(Napi::Env env, wgpu::Sampler h)
+        Napi::Object MakeSampler(Napi::Env env, WGPUSampler h)
         {
             Napi::Object o = NewGPUObject(env, "GPUSampler");
             SetHandle(o, h);
@@ -1238,7 +1327,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUBindGroupLayout ----------------------------------------------
-        Napi::Object MakeBindGroupLayout(Napi::Env env, wgpu::BindGroupLayout h)
+        Napi::Object MakeBindGroupLayout(Napi::Env env, WGPUBindGroupLayout h)
         {
             Napi::Object o = NewGPUObject(env, "GPUBindGroupLayout");
             SetHandle(o, h);
@@ -1246,7 +1335,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUBindGroup ----------------------------------------------------
-        Napi::Object MakeBindGroup(Napi::Env env, wgpu::BindGroup h)
+        Napi::Object MakeBindGroup(Napi::Env env, WGPUBindGroup h)
         {
             Napi::Object o = NewGPUObject(env, "GPUBindGroup");
             SetHandle(o, h);
@@ -1254,7 +1343,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUPipelineLayout -----------------------------------------------
-        Napi::Object MakePipelineLayout(Napi::Env env, wgpu::PipelineLayout h)
+        Napi::Object MakePipelineLayout(Napi::Env env, WGPUPipelineLayout h)
         {
             Napi::Object o = NewGPUObject(env, "GPUPipelineLayout");
             SetHandle(o, h);
@@ -1262,7 +1351,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUShaderModule -------------------------------------------------
-        Napi::Object MakeShaderModule(Napi::Env env, wgpu::ShaderModule h)
+        Napi::Object MakeShaderModule(Napi::Env env, WGPUShaderModule h)
         {
             Napi::Object o = NewGPUObject(env, "GPUShaderModule");
             SetHandle(o, h);
@@ -1278,20 +1367,21 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUQuerySet -----------------------------------------------------
-        Napi::Object MakeQuerySet(Napi::Env env, wgpu::QuerySet h, uint32_t count)
+        Napi::Object MakeQuerySet(Napi::Env env, WGPUQuerySet h, uint32_t count)
         {
             Napi::Object o = NewGPUObject(env, "GPUQuerySet");
             SetHandle(o, h);
             o.Set("count", Napi::Number::New(env, count));
             SetMethod(o, "destroy", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                DeferDestroy([h]() mutable { h.Destroy(); });
+                wgpuQuerySetAddRef(h);
+                DeferDestroy([h]() { wgpuQuerySetDestroy(h); wgpuQuerySetRelease(h); });
                 return info.Env().Undefined();
             });
             return o;
         }
 
         // ---- GPUCommandBuffer ------------------------------------------------
-        Napi::Object MakeCommandBuffer(Napi::Env env, wgpu::CommandBuffer h)
+        Napi::Object MakeCommandBuffer(Napi::Env env, WGPUCommandBuffer h)
         {
             Napi::Object o = NewGPUObject(env, "GPUCommandBuffer");
             SetHandle(o, h);
@@ -1299,27 +1389,27 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPURenderPipeline -----------------------------------------------
-        Napi::Object MakeRenderPipeline(Napi::Env env, wgpu::RenderPipeline h)
+        Napi::Object MakeRenderPipeline(Napi::Env env, WGPURenderPipeline h)
         {
             Napi::Object o = NewGPUObject(env, "GPURenderPipeline");
             SetHandle(o, h);
             SetMethod(o, "getBindGroupLayout", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 uint32_t index = ArgU32(info, 0, 0);
-                return MakeBindGroupLayout(env, h.GetBindGroupLayout(index));
+                return MakeBindGroupLayout(env, wgpuRenderPipelineGetBindGroupLayout(h, index));
             });
             return o;
         }
 
         // ---- GPUComputePipeline ----------------------------------------------
-        Napi::Object MakeComputePipeline(Napi::Env env, wgpu::ComputePipeline h)
+        Napi::Object MakeComputePipeline(Napi::Env env, WGPUComputePipeline h)
         {
             Napi::Object o = NewGPUObject(env, "GPUComputePipeline");
             SetHandle(o, h);
             SetMethod(o, "getBindGroupLayout", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 uint32_t index = ArgU32(info, 0, 0);
-                return MakeBindGroupLayout(env, h.GetBindGroupLayout(index));
+                return MakeBindGroupLayout(env, wgpuComputePipelineGetBindGroupLayout(h, index));
             });
             return o;
         }
@@ -1333,21 +1423,21 @@ namespace Babylon::Plugins::NativeDawn
             }
             Napi::Object desc = descVal.As<Napi::Object>();
 
-            wgpu::RenderPipelineDescriptor rp{};
+            WGPURenderPipelineDescriptor rp = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
             std::string label = PropStr(desc, "label");
-            if (!label.empty()) rp.label = label.c_str();
+            if (!label.empty()) rp.label = StrView(label);
 
             // layout (object => explicit; "auto"/absent => auto layout)
             {
                 Napi::Value layoutV = desc.Get("layout");
-                wgpu::PipelineLayout* pl = GetH<wgpu::PipelineLayout>(layoutV);
+                WGPUPipelineLayout* pl = GetH<WGPUPipelineLayout>(layoutV);
                 if (pl != nullptr) rp.layout = *pl;
             }
 
             // vertex
             std::string vEntry;
-            std::vector<wgpu::VertexBufferLayout> vBuffers;
-            std::vector<std::vector<wgpu::VertexAttribute>> vAttrs;
+            std::vector<WGPUVertexBufferLayout> vBuffers;
+            std::vector<std::vector<WGPUVertexAttribute>> vAttrs;
             {
                 Napi::Value vtxV = desc.Get("vertex");
                 if (!vtxV.IsObject())
@@ -1355,10 +1445,10 @@ namespace Babylon::Plugins::NativeDawn
                     throw Napi::Error::New(env, "NativeDawn: createRenderPipeline requires vertex stage");
                 }
                 Napi::Object vtx = vtxV.As<Napi::Object>();
-                wgpu::ShaderModule* mod = GetH<wgpu::ShaderModule>(vtx.Get("module"));
+                WGPUShaderModule* mod = GetH<WGPUShaderModule>(vtx.Get("module"));
                 if (mod != nullptr) rp.vertex.module = *mod;
                 vEntry = PropStr(vtx, "entryPoint");
-                if (!vEntry.empty()) rp.vertex.entryPoint = vEntry.c_str();
+                if (!vEntry.empty()) rp.vertex.entryPoint = StrView(vEntry);
 
                 Napi::Value buffersV = vtx.Get("buffers");
                 if (buffersV.IsArray())
@@ -1372,7 +1462,7 @@ namespace Babylon::Plugins::NativeDawn
                         Napi::Value be = buffers.Get(static_cast<uint32_t>(i));
                         if (!be.IsObject())
                         {
-                            vBuffers[i].stepMode = wgpu::VertexStepMode::Undefined;
+                            vBuffers[i].stepMode = WGPUVertexStepMode_Undefined;
                             vBuffers[i].arrayStride = 0;
                             vBuffers[i].attributeCount = 0;
                             continue;
@@ -1380,7 +1470,7 @@ namespace Babylon::Plugins::NativeDawn
                         Napi::Object bo = be.As<Napi::Object>();
                         vBuffers[i].arrayStride = PropU64(bo, "arrayStride", 0);
                         vBuffers[i].stepMode = PropPresent(bo, "stepMode")
-                            ? vertexStepMode(PropStr(bo, "stepMode")) : wgpu::VertexStepMode::Vertex;
+                            ? vertexStepMode(PropStr(bo, "stepMode")) : WGPUVertexStepMode_Vertex;
                         Napi::Value attrsV = bo.Get("attributes");
                         if (attrsV.IsArray())
                         {
@@ -1390,7 +1480,7 @@ namespace Babylon::Plugins::NativeDawn
                                 Napi::Value av = attrs.Get(j);
                                 if (!av.IsObject()) continue;
                                 Napi::Object ao = av.As<Napi::Object>();
-                                wgpu::VertexAttribute va{};
+                                WGPUVertexAttribute va = WGPU_VERTEX_ATTRIBUTE_INIT;
                                 va.format = vertexFormat(PropStr(ao, "format"));
                                 va.offset = PropU64(ao, "offset", 0);
                                 va.shaderLocation = PropU32(ao, "shaderLocation", 0);
@@ -1412,7 +1502,7 @@ namespace Babylon::Plugins::NativeDawn
                 {
                     Napi::Object pr = prV.As<Napi::Object>();
                     rp.primitive.topology = PropPresent(pr, "topology")
-                        ? primitiveTopology(PropStr(pr, "topology")) : wgpu::PrimitiveTopology::TriangleList;
+                        ? primitiveTopology(PropStr(pr, "topology")) : WGPUPrimitiveTopology_TriangleList;
                     if (PropPresent(pr, "stripIndexFormat"))
                         rp.primitive.stripIndexFormat = indexFormat(PropStr(pr, "stripIndexFormat"));
                     rp.primitive.frontFace = frontFace(PropStr(pr, "frontFace"));
@@ -1421,7 +1511,7 @@ namespace Babylon::Plugins::NativeDawn
             }
 
             // depthStencil
-            wgpu::DepthStencilState dss{};
+            WGPUDepthStencilState dss = WGPU_DEPTH_STENCIL_STATE_INIT;
             {
                 Napi::Value dsV = desc.Get("depthStencil");
                 if (dsV.IsObject())
@@ -1429,7 +1519,7 @@ namespace Babylon::Plugins::NativeDawn
                     Napi::Object ds = dsV.As<Napi::Object>();
                     dss.format = textureFormat(PropStr(ds, "format"));
                     dss.depthWriteEnabled = PropBool(ds, "depthWriteEnabled", false)
-                        ? wgpu::OptionalBool::True : wgpu::OptionalBool::False;
+                        ? WGPUOptionalBool_True : WGPUOptionalBool_False;
                     if (PropPresent(ds, "depthCompare"))
                         dss.depthCompare = compareFunction(PropStr(ds, "depthCompare"));
                     dss.stencilReadMask = PropU32(ds, "stencilReadMask", 0xFFFFFFFF);
@@ -1437,7 +1527,7 @@ namespace Babylon::Plugins::NativeDawn
                     dss.depthBias = PropI32(ds, "depthBias", 0);
                     dss.depthBiasSlopeScale = static_cast<float>(PropF64(ds, "depthBiasSlopeScale", 0));
                     dss.depthBiasClamp = static_cast<float>(PropF64(ds, "depthBiasClamp", 0));
-                    auto parseFace = [](Napi::Object f, wgpu::StencilFaceState& out) {
+                    auto parseFace = [](Napi::Object f, WGPUStencilFaceState& out) {
                         if (PropPresent(f, "compare")) out.compare = compareFunction(PropStr(f, "compare"));
                         if (PropPresent(f, "failOp")) out.failOp = stencilOperation(PropStr(f, "failOp"));
                         if (PropPresent(f, "depthFailOp")) out.depthFailOp = stencilOperation(PropStr(f, "depthFailOp"));
@@ -1463,18 +1553,18 @@ namespace Babylon::Plugins::NativeDawn
 
             // fragment
             std::string fEntry;
-            wgpu::FragmentState fs{};
-            std::vector<wgpu::ColorTargetState> fTargets;
-            std::vector<wgpu::BlendState> fBlends;
+            WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
+            std::vector<WGPUColorTargetState> fTargets;
+            std::vector<WGPUBlendState> fBlends;
             {
                 Napi::Value frV = desc.Get("fragment");
                 if (frV.IsObject())
                 {
                     Napi::Object fr = frV.As<Napi::Object>();
-                    wgpu::ShaderModule* mod = GetH<wgpu::ShaderModule>(fr.Get("module"));
+                    WGPUShaderModule* mod = GetH<WGPUShaderModule>(fr.Get("module"));
                     if (mod != nullptr) fs.module = *mod;
                     fEntry = PropStr(fr, "entryPoint");
-                    if (!fEntry.empty()) fs.entryPoint = fEntry.c_str();
+                    if (!fEntry.empty()) fs.entryPoint = StrView(fEntry);
 
                     Napi::Value tV = fr.Get("targets");
                     if (tV.IsArray())
@@ -1489,12 +1579,12 @@ namespace Babylon::Plugins::NativeDawn
                             if (!te.IsObject()) continue;
                             Napi::Object to = te.As<Napi::Object>();
                             fTargets[i].format = textureFormat(PropStr(to, "format"));
-                            fTargets[i].writeMask = wgpu::ColorWriteMask(PropU32(to, "writeMask", 0xF));
+                            fTargets[i].writeMask = WGPUColorWriteMask(PropU32(to, "writeMask", 0xF));
                             Napi::Value blV = to.Get("blend");
                             if (blV.IsObject())
                             {
                                 Napi::Object bl = blV.As<Napi::Object>();
-                                wgpu::BlendState& bs = fBlends[i];
+                                WGPUBlendState& bs = fBlends[i];
                                 Napi::Value cV = bl.Get("color");
                                 if (cV.IsObject())
                                 {
@@ -1521,7 +1611,7 @@ namespace Babylon::Plugins::NativeDawn
                 }
             }
 
-            wgpu::RenderPipeline pipe = g_state.device.CreateRenderPipeline(&rp);
+            WGPURenderPipeline pipe = wgpuDeviceCreateRenderPipeline(g_state.device, &rp);
             return MakeRenderPipeline(env, pipe);
         }
 
@@ -1534,13 +1624,13 @@ namespace Babylon::Plugins::NativeDawn
             }
             Napi::Object desc = descVal.As<Napi::Object>();
 
-            wgpu::ComputePipelineDescriptor cp{};
+            WGPUComputePipelineDescriptor cp = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
             std::string label = PropStr(desc, "label");
-            if (!label.empty()) cp.label = label.c_str();
+            if (!label.empty()) cp.label = StrView(label);
 
             {
                 Napi::Value layoutV = desc.Get("layout");
-                wgpu::PipelineLayout* pl = GetH<wgpu::PipelineLayout>(layoutV);
+                WGPUPipelineLayout* pl = GetH<WGPUPipelineLayout>(layoutV);
                 if (pl != nullptr) cp.layout = *pl;
             }
 
@@ -1551,39 +1641,39 @@ namespace Babylon::Plugins::NativeDawn
                 throw Napi::Error::New(env, "NativeDawn: createComputePipeline requires compute stage");
             }
             Napi::Object co = coV.As<Napi::Object>();
-            wgpu::ShaderModule* mod = GetH<wgpu::ShaderModule>(co.Get("module"));
+            WGPUShaderModule* mod = GetH<WGPUShaderModule>(co.Get("module"));
             if (mod != nullptr) cp.compute.module = *mod;
             cEntry = PropStr(co, "entryPoint");
-            if (!cEntry.empty()) cp.compute.entryPoint = cEntry.c_str();
+            if (!cEntry.empty()) cp.compute.entryPoint = StrView(cEntry);
 
-            wgpu::ComputePipeline pipe = g_state.device.CreateComputePipeline(&cp);
+            WGPUComputePipeline pipe = wgpuDeviceCreateComputePipeline(g_state.device, &cp);
             return MakeComputePipeline(env, pipe);
         }
 
         // ---- texel copy helpers ----------------------------------------------
-        wgpu::TexelCopyBufferInfo ParseTexelCopyBuffer(Napi::Object o)
+        WGPUTexelCopyBufferInfo ParseTexelCopyBuffer(Napi::Object o)
         {
-            wgpu::TexelCopyBufferInfo info{};
-            wgpu::Buffer* b = GetH<wgpu::Buffer>(o.Get("buffer"));
+            WGPUTexelCopyBufferInfo info = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
+            WGPUBuffer* b = GetH<WGPUBuffer>(o.Get("buffer"));
             if (b != nullptr) info.buffer = *b;
             info.layout.offset = PropU64(o, "offset", 0);
             info.layout.bytesPerRow = PropPresent(o, "bytesPerRow")
-                ? PropU32(o, "bytesPerRow", 0) : wgpu::kCopyStrideUndefined;
+                ? PropU32(o, "bytesPerRow", 0) : WGPU_COPY_STRIDE_UNDEFINED;
             info.layout.rowsPerImage = PropPresent(o, "rowsPerImage")
-                ? PropU32(o, "rowsPerImage", 0) : wgpu::kCopyStrideUndefined;
+                ? PropU32(o, "rowsPerImage", 0) : WGPU_COPY_STRIDE_UNDEFINED;
             return info;
         }
-        wgpu::TexelCopyTextureInfo ParseTexelCopyTexture(Napi::Object o)
+        WGPUTexelCopyTextureInfo ParseTexelCopyTexture(Napi::Object o)
         {
-            wgpu::TexelCopyTextureInfo info{};
-            wgpu::Texture* t = GetH<wgpu::Texture>(o.Get("texture"));
+            WGPUTexelCopyTextureInfo info = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+            WGPUTexture* t = GetH<WGPUTexture>(o.Get("texture"));
             if (t != nullptr) info.texture = *t;
             info.mipLevel = PropU32(o, "mipLevel", 0);
             if (PropPresent(o, "origin")) info.origin = ParseOrigin3D(o.Get("origin"));
             std::string aspect = PropStr(o, "aspect");
-            if (aspect == "stencil-only") info.aspect = wgpu::TextureAspect::StencilOnly;
-            else if (aspect == "depth-only") info.aspect = wgpu::TextureAspect::DepthOnly;
-            else info.aspect = wgpu::TextureAspect::All;
+            if (aspect == "stencil-only") info.aspect = WGPUTextureAspect_StencilOnly;
+            else if (aspect == "depth-only") info.aspect = WGPUTextureAspect_DepthOnly;
+            else info.aspect = WGPUTextureAspect_All;
             return info;
         }
 
@@ -1612,179 +1702,179 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPURenderPassEncoder --------------------------------------------
-        Napi::Object MakeRenderPassEncoder(Napi::Env env, wgpu::RenderPassEncoder h)
+        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h)
         {
             Napi::Object o = NewGPUObject(env, "GPURenderPassEncoder");
             SetHandle(o, h);
             SetMethod(o, "setPipeline", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::RenderPipeline* p = GetH<wgpu::RenderPipeline>(info[0]);
-                if (p != nullptr) h.SetPipeline(*p);
+                WGPURenderPipeline* p = GetH<WGPURenderPipeline>(info[0]);
+                if (p != nullptr) wgpuRenderPassEncoderSetPipeline(h, *p);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setBindGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 uint32_t index = ArgU32(info, 0, 0);
-                wgpu::BindGroup bg{};
-                wgpu::BindGroup* p = GetH<wgpu::BindGroup>(info[1]);
+                WGPUBindGroup bg = nullptr;
+                WGPUBindGroup* p = GetH<WGPUBindGroup>(info[1]);
                 if (p != nullptr) bg = *p;
                 std::vector<uint32_t> offsets;
                 if (info.Length() > 2 && !IsNullish(info[2])) offsets = ReadU32Array(info[2]);
-                h.SetBindGroup(index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
+                wgpuRenderPassEncoderSetBindGroup(h, index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
                 return info.Env().Undefined();
             });
             SetMethod(o, "setVertexBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 uint32_t slot = ArgU32(info, 0, 0);
-                wgpu::Buffer buf{};
-                wgpu::Buffer* p = GetH<wgpu::Buffer>(info[1]);
+                WGPUBuffer buf = nullptr;
+                WGPUBuffer* p = GetH<WGPUBuffer>(info[1]);
                 if (p != nullptr) buf = *p;
                 uint64_t offset = ArgU64(info, 2, 0);
-                uint64_t size = ArgIsUndef(info, 3) ? wgpu::kWholeSize : ArgU64(info, 3, 0);
-                h.SetVertexBuffer(slot, buf, offset, size);
+                uint64_t size = ArgIsUndef(info, 3) ? WGPU_WHOLE_SIZE : ArgU64(info, 3, 0);
+                wgpuRenderPassEncoderSetVertexBuffer(h, slot, buf, offset, size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setIndexBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer buf{};
-                wgpu::Buffer* p = GetH<wgpu::Buffer>(info[0]);
+                WGPUBuffer buf = nullptr;
+                WGPUBuffer* p = GetH<WGPUBuffer>(info[0]);
                 if (p != nullptr) buf = *p;
                 std::string fmt = (info.Length() > 1 && info[1].IsString())
                     ? info[1].As<Napi::String>().Utf8Value() : std::string{};
                 uint64_t offset = ArgU64(info, 2, 0);
-                uint64_t size = ArgIsUndef(info, 3) ? wgpu::kWholeSize : ArgU64(info, 3, 0);
-                h.SetIndexBuffer(buf, indexFormat(fmt), offset, size);
+                uint64_t size = ArgIsUndef(info, 3) ? WGPU_WHOLE_SIZE : ArgU64(info, 3, 0);
+                wgpuRenderPassEncoderSetIndexBuffer(h, buf, indexFormat(fmt), offset, size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "draw", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.Draw(ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
+                wgpuRenderPassEncoderDraw(h, ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "drawIndexed", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.DrawIndexed(ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0),
+                wgpuRenderPassEncoderDrawIndexed(h, ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0),
                     ArgI32(info, 3, 0), ArgU32(info, 4, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "drawIndirect", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* b = GetH<wgpu::Buffer>(info[0]);
-                if (b != nullptr) h.DrawIndirect(*b, ArgU64(info, 1, 0));
+                WGPUBuffer* b = GetH<WGPUBuffer>(info[0]);
+                if (b != nullptr) wgpuRenderPassEncoderDrawIndirect(h, *b, ArgU64(info, 1, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "drawIndexedIndirect", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* b = GetH<wgpu::Buffer>(info[0]);
-                if (b != nullptr) h.DrawIndexedIndirect(*b, ArgU64(info, 1, 0));
+                WGPUBuffer* b = GetH<WGPUBuffer>(info[0]);
+                if (b != nullptr) wgpuRenderPassEncoderDrawIndexedIndirect(h, *b, ArgU64(info, 1, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "setViewport", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.SetViewport(static_cast<float>(ArgF64(info, 0, 0)), static_cast<float>(ArgF64(info, 1, 0)),
+                wgpuRenderPassEncoderSetViewport(h, static_cast<float>(ArgF64(info, 0, 0)), static_cast<float>(ArgF64(info, 1, 0)),
                     static_cast<float>(ArgF64(info, 2, 0)), static_cast<float>(ArgF64(info, 3, 0)),
                     static_cast<float>(ArgF64(info, 4, 0)), static_cast<float>(ArgF64(info, 5, 1)));
                 return info.Env().Undefined();
             });
             SetMethod(o, "setScissorRect", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.SetScissorRect(ArgU32(info, 0, 0), ArgU32(info, 1, 0), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
+                wgpuRenderPassEncoderSetScissorRect(h, ArgU32(info, 0, 0), ArgU32(info, 1, 0), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "setBlendConstant", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Color c = ParseColor(info[0]);
-                h.SetBlendConstant(&c);
+                WGPUColor c = ParseColor(info[0]);
+                wgpuRenderPassEncoderSetBlendConstant(h, &c);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setStencilReference", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.SetStencilReference(ArgU32(info, 0, 0));
+                wgpuRenderPassEncoderSetStencilReference(h, ArgU32(info, 0, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "beginOcclusionQuery", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.BeginOcclusionQuery(ArgU32(info, 0, 0));
+                wgpuRenderPassEncoderBeginOcclusionQuery(h, ArgU32(info, 0, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "endOcclusionQuery", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.EndOcclusionQuery();
+                wgpuRenderPassEncoderEndOcclusionQuery(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "executeBundles", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                std::vector<wgpu::RenderBundle> bundles;
+                std::vector<WGPURenderBundle> bundles;
                 if (info.Length() > 0 && info[0].IsArray())
                 {
                     Napi::Array a = info[0].As<Napi::Array>();
                     for (uint32_t i = 0; i < a.Length(); ++i)
                     {
-                        wgpu::RenderBundle* b = GetH<wgpu::RenderBundle>(a.Get(i));
+                        WGPURenderBundle* b = GetH<WGPURenderBundle>(a.Get(i));
                         if (b != nullptr) bundles.push_back(*b);
                     }
                 }
-                h.ExecuteBundles(bundles.size(), bundles.empty() ? nullptr : bundles.data());
+                wgpuRenderPassEncoderExecuteBundles(h, bundles.size(), bundles.empty() ? nullptr : bundles.data());
                 return info.Env().Undefined();
             });
             SetMethod(o, "pushDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.PushDebugGroup(s.c_str());
+                wgpuRenderPassEncoderPushDebugGroup(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "popDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.PopDebugGroup();
+                wgpuRenderPassEncoderPopDebugGroup(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "insertDebugMarker", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.InsertDebugMarker(s.c_str());
+                wgpuRenderPassEncoderInsertDebugMarker(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "end", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.End();
+                wgpuRenderPassEncoderEnd(h);
                 return info.Env().Undefined();
             });
             return o;
         }
 
         // ---- GPUComputePassEncoder -------------------------------------------
-        Napi::Object MakeComputePassEncoder(Napi::Env env, wgpu::ComputePassEncoder h)
+        Napi::Object MakeComputePassEncoder(Napi::Env env, WGPUComputePassEncoder h)
         {
             Napi::Object o = NewGPUObject(env, "GPUComputePassEncoder");
             SetHandle(o, h);
             SetMethod(o, "setPipeline", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::ComputePipeline* p = GetH<wgpu::ComputePipeline>(info[0]);
-                if (p != nullptr) h.SetPipeline(*p);
+                WGPUComputePipeline* p = GetH<WGPUComputePipeline>(info[0]);
+                if (p != nullptr) wgpuComputePassEncoderSetPipeline(h, *p);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setBindGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 uint32_t index = ArgU32(info, 0, 0);
-                wgpu::BindGroup bg{};
-                wgpu::BindGroup* p = GetH<wgpu::BindGroup>(info[1]);
+                WGPUBindGroup bg = nullptr;
+                WGPUBindGroup* p = GetH<WGPUBindGroup>(info[1]);
                 if (p != nullptr) bg = *p;
                 std::vector<uint32_t> offsets;
                 if (info.Length() > 2 && !IsNullish(info[2])) offsets = ReadU32Array(info[2]);
-                h.SetBindGroup(index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
+                wgpuComputePassEncoderSetBindGroup(h, index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
                 return info.Env().Undefined();
             });
             SetMethod(o, "dispatchWorkgroups", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.DispatchWorkgroups(ArgU32(info, 0, 1), ArgU32(info, 1, 1), ArgU32(info, 2, 1));
+                wgpuComputePassEncoderDispatchWorkgroups(h, ArgU32(info, 0, 1), ArgU32(info, 1, 1), ArgU32(info, 2, 1));
                 return info.Env().Undefined();
             });
             SetMethod(o, "dispatchWorkgroupsIndirect", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* b = GetH<wgpu::Buffer>(info[0]);
-                if (b != nullptr) h.DispatchWorkgroupsIndirect(*b, ArgU64(info, 1, 0));
+                WGPUBuffer* b = GetH<WGPUBuffer>(info[0]);
+                if (b != nullptr) wgpuComputePassEncoderDispatchWorkgroupsIndirect(h, *b, ArgU64(info, 1, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "pushDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.PushDebugGroup(s.c_str());
+                wgpuComputePassEncoderPushDebugGroup(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "popDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.PopDebugGroup();
+                wgpuComputePassEncoderPopDebugGroup(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "insertDebugMarker", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.InsertDebugMarker(s.c_str());
+                wgpuComputePassEncoderInsertDebugMarker(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "end", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.End();
+                wgpuComputePassEncoderEnd(h);
                 return info.Env().Undefined();
             });
             return o;
         }
 
         // ---- GPURenderBundle -------------------------------------------------
-        Napi::Object MakeRenderBundle(Napi::Env env, wgpu::RenderBundle h)
+        Napi::Object MakeRenderBundle(Napi::Env env, WGPURenderBundle h)
         {
             Napi::Object o = NewGPUObject(env, "GPURenderBundle");
             SetHandle(o, h);
@@ -1792,85 +1882,85 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPURenderBundleEncoder ------------------------------------------
-        Napi::Object MakeRenderBundleEncoder(Napi::Env env, wgpu::RenderBundleEncoder h)
+        Napi::Object MakeRenderBundleEncoder(Napi::Env env, WGPURenderBundleEncoder h)
         {
             Napi::Object o = NewGPUObject(env, "GPURenderBundleEncoder");
             SetHandle(o, h);
             SetMethod(o, "setPipeline", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::RenderPipeline* p = GetH<wgpu::RenderPipeline>(info[0]);
-                if (p != nullptr) h.SetPipeline(*p);
+                WGPURenderPipeline* p = GetH<WGPURenderPipeline>(info[0]);
+                if (p != nullptr) wgpuRenderBundleEncoderSetPipeline(h, *p);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setBindGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 uint32_t index = ArgU32(info, 0, 0);
-                wgpu::BindGroup bg{};
-                wgpu::BindGroup* p = GetH<wgpu::BindGroup>(info[1]);
+                WGPUBindGroup bg = nullptr;
+                WGPUBindGroup* p = GetH<WGPUBindGroup>(info[1]);
                 if (p != nullptr) bg = *p;
                 std::vector<uint32_t> offsets;
                 if (info.Length() > 2 && !IsNullish(info[2])) offsets = ReadU32Array(info[2]);
-                h.SetBindGroup(index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
+                wgpuRenderBundleEncoderSetBindGroup(h, index, bg, offsets.size(), offsets.empty() ? nullptr : offsets.data());
                 return info.Env().Undefined();
             });
             SetMethod(o, "setVertexBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 uint32_t slot = ArgU32(info, 0, 0);
-                wgpu::Buffer buf{};
-                wgpu::Buffer* p = GetH<wgpu::Buffer>(info[1]);
+                WGPUBuffer buf = nullptr;
+                WGPUBuffer* p = GetH<WGPUBuffer>(info[1]);
                 if (p != nullptr) buf = *p;
                 uint64_t offset = ArgU64(info, 2, 0);
-                uint64_t size = ArgIsUndef(info, 3) ? wgpu::kWholeSize : ArgU64(info, 3, 0);
-                h.SetVertexBuffer(slot, buf, offset, size);
+                uint64_t size = ArgIsUndef(info, 3) ? WGPU_WHOLE_SIZE : ArgU64(info, 3, 0);
+                wgpuRenderBundleEncoderSetVertexBuffer(h, slot, buf, offset, size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "setIndexBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer buf{};
-                wgpu::Buffer* p = GetH<wgpu::Buffer>(info[0]);
+                WGPUBuffer buf = nullptr;
+                WGPUBuffer* p = GetH<WGPUBuffer>(info[0]);
                 if (p != nullptr) buf = *p;
                 std::string fmt = (info.Length() > 1 && info[1].IsString())
                     ? info[1].As<Napi::String>().Utf8Value() : std::string{};
                 uint64_t offset = ArgU64(info, 2, 0);
-                uint64_t size = ArgIsUndef(info, 3) ? wgpu::kWholeSize : ArgU64(info, 3, 0);
-                h.SetIndexBuffer(buf, indexFormat(fmt), offset, size);
+                uint64_t size = ArgIsUndef(info, 3) ? WGPU_WHOLE_SIZE : ArgU64(info, 3, 0);
+                wgpuRenderBundleEncoderSetIndexBuffer(h, buf, indexFormat(fmt), offset, size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "draw", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.Draw(ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
+                wgpuRenderBundleEncoderDraw(h, ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "drawIndexed", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.DrawIndexed(ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0),
+                wgpuRenderBundleEncoderDrawIndexed(h, ArgU32(info, 0, 0), ArgU32(info, 1, 1), ArgU32(info, 2, 0),
                     ArgI32(info, 3, 0), ArgU32(info, 4, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "pushDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.PushDebugGroup(s.c_str());
+                wgpuRenderBundleEncoderPushDebugGroup(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "popDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.PopDebugGroup();
+                wgpuRenderBundleEncoderPopDebugGroup(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "insertDebugMarker", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.InsertDebugMarker(s.c_str());
+                wgpuRenderBundleEncoderInsertDebugMarker(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "finish", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::RenderBundleDescriptor d{};
+                WGPURenderBundleDescriptor d = WGPU_RENDER_BUNDLE_DESCRIPTOR_INIT;
                 std::string label;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     label = PropStr(info[0].As<Napi::Object>(), "label");
-                    if (!label.empty()) d.label = label.c_str();
+                    if (!label.empty()) d.label = StrView(label);
                 }
-                return MakeRenderBundle(env, h.Finish(&d));
+                return MakeRenderBundle(env, wgpuRenderBundleEncoderFinish(h, &d));
             });
             return o;
         }
 
         // ---- GPUCommandEncoder -----------------------------------------------
-        Napi::Object MakeCommandEncoder(Napi::Env env, wgpu::CommandEncoder h)
+        Napi::Object MakeCommandEncoder(Napi::Env env, WGPUCommandEncoder h)
         {
             Napi::Object o = NewGPUObject(env, "GPUCommandEncoder");
             SetHandle(o, h);
@@ -1882,25 +1972,25 @@ namespace Babylon::Plugins::NativeDawn
                     throw Napi::Error::New(env, "NativeDawn: beginRenderPass requires a descriptor");
                 }
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::RenderPassDescriptor rpd{};
+                WGPURenderPassDescriptor rpd = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) rpd.label = label.c_str();
+                if (!label.empty()) rpd.label = StrView(label);
 
-                std::vector<wgpu::RenderPassColorAttachment> colors;
+                std::vector<WGPURenderPassColorAttachment> colors;
                 Napi::Value caV = desc.Get("colorAttachments");
                 if (caV.IsArray())
                 {
                     Napi::Array arr = caV.As<Napi::Array>();
                     for (uint32_t i = 0; i < arr.Length(); ++i)
                     {
-                        wgpu::RenderPassColorAttachment c{};
+                        WGPURenderPassColorAttachment c = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
                         Napi::Value ev = arr.Get(i);
                         if (!ev.IsObject()) { colors.push_back(c); continue; }
                         Napi::Object ca = ev.As<Napi::Object>();
-                        wgpu::TextureView* view = GetH<wgpu::TextureView>(ca.Get("view"));
+                        WGPUTextureView* view = GetH<WGPUTextureView>(ca.Get("view"));
                         if (view != nullptr) c.view = *view;
                         if (PropPresent(ca, "depthSlice")) c.depthSlice = PropU32(ca, "depthSlice", 0);
-                        wgpu::TextureView* resolve = GetH<wgpu::TextureView>(ca.Get("resolveTarget"));
+                        WGPUTextureView* resolve = GetH<WGPUTextureView>(ca.Get("resolveTarget"));
                         if (resolve != nullptr) c.resolveTarget = *resolve;
                         c.loadOp = loadOp(PropStr(ca, "loadOp"));
                         c.storeOp = storeOp(PropStr(ca, "storeOp"));
@@ -1911,12 +2001,12 @@ namespace Babylon::Plugins::NativeDawn
                 rpd.colorAttachmentCount = colors.size();
                 rpd.colorAttachments = colors.empty() ? nullptr : colors.data();
 
-                wgpu::RenderPassDepthStencilAttachment dsa{};
+                WGPURenderPassDepthStencilAttachment dsa = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
                 Napi::Value dsV = desc.Get("depthStencilAttachment");
                 if (dsV.IsObject())
                 {
                     Napi::Object ds = dsV.As<Napi::Object>();
-                    wgpu::TextureView* view = GetH<wgpu::TextureView>(ds.Get("view"));
+                    WGPUTextureView* view = GetH<WGPUTextureView>(ds.Get("view"));
                     if (view != nullptr) dsa.view = *view;
                     if (PropPresent(ds, "depthLoadOp")) dsa.depthLoadOp = loadOp(PropStr(ds, "depthLoadOp"));
                     if (PropPresent(ds, "depthStoreOp")) dsa.depthStoreOp = storeOp(PropStr(ds, "depthStoreOp"));
@@ -1929,88 +2019,88 @@ namespace Babylon::Plugins::NativeDawn
                     rpd.depthStencilAttachment = &dsa;
                 }
 
-                return MakeRenderPassEncoder(env, h.BeginRenderPass(&rpd));
+                return MakeRenderPassEncoder(env, wgpuCommandEncoderBeginRenderPass(h, &rpd));
             });
             SetMethod(o, "beginComputePass", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::ComputePassDescriptor d{};
+                WGPUComputePassDescriptor d = WGPU_COMPUTE_PASS_DESCRIPTOR_INIT;
                 std::string label;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     label = PropStr(info[0].As<Napi::Object>(), "label");
-                    if (!label.empty()) d.label = label.c_str();
+                    if (!label.empty()) d.label = StrView(label);
                 }
-                return MakeComputePassEncoder(env, h.BeginComputePass(&d));
+                return MakeComputePassEncoder(env, wgpuCommandEncoderBeginComputePass(h, &d));
             });
             SetMethod(o, "copyBufferToBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* src = GetH<wgpu::Buffer>(info[0]);
-                wgpu::Buffer* dst = GetH<wgpu::Buffer>(info[2]);
+                WGPUBuffer* src = GetH<WGPUBuffer>(info[0]);
+                WGPUBuffer* dst = GetH<WGPUBuffer>(info[2]);
                 if (src != nullptr && dst != nullptr)
-                    h.CopyBufferToBuffer(*src, ArgU64(info, 1, 0), *dst, ArgU64(info, 3, 0), ArgU64(info, 4, 0));
+                    wgpuCommandEncoderCopyBufferToBuffer(h, *src, ArgU64(info, 1, 0), *dst, ArgU64(info, 3, 0), ArgU64(info, 4, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "copyBufferToTexture", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::TexelCopyBufferInfo src = ParseTexelCopyBuffer(info[0].As<Napi::Object>());
-                wgpu::TexelCopyTextureInfo dst = ParseTexelCopyTexture(info[1].As<Napi::Object>());
-                wgpu::Extent3D size = ParseExtent3D(info[2]);
-                h.CopyBufferToTexture(&src, &dst, &size);
+                WGPUTexelCopyBufferInfo src = ParseTexelCopyBuffer(info[0].As<Napi::Object>());
+                WGPUTexelCopyTextureInfo dst = ParseTexelCopyTexture(info[1].As<Napi::Object>());
+                WGPUExtent3D size = ParseExtent3D(info[2]);
+                wgpuCommandEncoderCopyBufferToTexture(h, &src, &dst, &size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "copyTextureToBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::TexelCopyTextureInfo src = ParseTexelCopyTexture(info[0].As<Napi::Object>());
-                wgpu::TexelCopyBufferInfo dst = ParseTexelCopyBuffer(info[1].As<Napi::Object>());
-                wgpu::Extent3D size = ParseExtent3D(info[2]);
-                h.CopyTextureToBuffer(&src, &dst, &size);
+                WGPUTexelCopyTextureInfo src = ParseTexelCopyTexture(info[0].As<Napi::Object>());
+                WGPUTexelCopyBufferInfo dst = ParseTexelCopyBuffer(info[1].As<Napi::Object>());
+                WGPUExtent3D size = ParseExtent3D(info[2]);
+                wgpuCommandEncoderCopyTextureToBuffer(h, &src, &dst, &size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "copyTextureToTexture", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::TexelCopyTextureInfo src = ParseTexelCopyTexture(info[0].As<Napi::Object>());
-                wgpu::TexelCopyTextureInfo dst = ParseTexelCopyTexture(info[1].As<Napi::Object>());
-                wgpu::Extent3D size = ParseExtent3D(info[2]);
-                h.CopyTextureToTexture(&src, &dst, &size);
+                WGPUTexelCopyTextureInfo src = ParseTexelCopyTexture(info[0].As<Napi::Object>());
+                WGPUTexelCopyTextureInfo dst = ParseTexelCopyTexture(info[1].As<Napi::Object>());
+                WGPUExtent3D size = ParseExtent3D(info[2]);
+                wgpuCommandEncoderCopyTextureToTexture(h, &src, &dst, &size);
                 return info.Env().Undefined();
             });
             SetMethod(o, "clearBuffer", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* b = GetH<wgpu::Buffer>(info[0]);
+                WGPUBuffer* b = GetH<WGPUBuffer>(info[0]);
                 if (b != nullptr)
                 {
                     uint64_t offset = ArgU64(info, 1, 0);
-                    uint64_t size = ArgIsUndef(info, 2) ? wgpu::kWholeSize : ArgU64(info, 2, 0);
-                    h.ClearBuffer(*b, offset, size);
+                    uint64_t size = ArgIsUndef(info, 2) ? WGPU_WHOLE_SIZE : ArgU64(info, 2, 0);
+                    wgpuCommandEncoderClearBuffer(h, *b, offset, size);
                 }
                 return info.Env().Undefined();
             });
             SetMethod(o, "resolveQuerySet", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::QuerySet* qs = GetH<wgpu::QuerySet>(info[0]);
-                wgpu::Buffer* dst = GetH<wgpu::Buffer>(info[3]);
+                WGPUQuerySet* qs = GetH<WGPUQuerySet>(info[0]);
+                WGPUBuffer* dst = GetH<WGPUBuffer>(info[3]);
                 if (qs != nullptr && dst != nullptr)
-                    h.ResolveQuerySet(*qs, ArgU32(info, 1, 0), ArgU32(info, 2, 0), *dst, ArgU64(info, 4, 0));
+                    wgpuCommandEncoderResolveQuerySet(h, *qs, ArgU32(info, 1, 0), ArgU32(info, 2, 0), *dst, ArgU64(info, 4, 0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "pushDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.PushDebugGroup(s.c_str());
+                wgpuCommandEncoderPushDebugGroup(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "popDebugGroup", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                h.PopDebugGroup();
+                wgpuCommandEncoderPopDebugGroup(h);
                 return info.Env().Undefined();
             });
             SetMethod(o, "insertDebugMarker", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string s = (info.Length() > 0 && info[0].IsString()) ? info[0].As<Napi::String>().Utf8Value() : std::string{};
-                h.InsertDebugMarker(s.c_str());
+                wgpuCommandEncoderInsertDebugMarker(h, StrView(s));
                 return info.Env().Undefined();
             });
             SetMethod(o, "finish", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::CommandBufferDescriptor d{};
+                WGPUCommandBufferDescriptor d = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
                 std::string label;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     label = PropStr(info[0].As<Napi::Object>(), "label");
-                    if (!label.empty()) d.label = label.c_str();
+                    if (!label.empty()) d.label = StrView(label);
                 }
-                return MakeCommandBuffer(env, h.Finish(&d));
+                return MakeCommandBuffer(env, wgpuCommandEncoderFinish(h, &d));
             });
             return o;
         }
@@ -2019,23 +2109,23 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeQueue(Napi::Env env)
         {
             Napi::Object o = NewGPUObject(env, "GPUQueue");
-            SetHandle(o, g_state.queue);
+            SetBorrowedHandle(o, g_state.queue);
             SetMethod(o, "submit", [](const Napi::CallbackInfo& info) -> Napi::Value {
-                std::vector<wgpu::CommandBuffer> bufs;
+                std::vector<WGPUCommandBuffer> bufs;
                 if (info.Length() > 0 && info[0].IsArray())
                 {
                     Napi::Array arr = info[0].As<Napi::Array>();
                     for (uint32_t i = 0; i < arr.Length(); ++i)
                     {
-                        wgpu::CommandBuffer* cb = GetH<wgpu::CommandBuffer>(arr.Get(i));
+                        WGPUCommandBuffer* cb = GetH<WGPUCommandBuffer>(arr.Get(i));
                         if (cb != nullptr) bufs.push_back(*cb);
                     }
                 }
-                if (!bufs.empty()) g_state.queue.Submit(bufs.size(), bufs.data());
+                if (!bufs.empty()) wgpuQueueSubmit(g_state.queue, bufs.size(), bufs.data());
                 return info.Env().Undefined();
             });
             SetMethod(o, "writeBuffer", [](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpu::Buffer* b = GetH<wgpu::Buffer>(info[0]);
+                WGPUBuffer* b = GetH<WGPUBuffer>(info[0]);
                 if (b == nullptr) return info.Env().Undefined();
                 uint64_t bufferOffset = ArgU64(info, 1, 0);
                 Bytes bytes = GetBytes(info[2]);
@@ -2043,24 +2133,24 @@ namespace Babylon::Plugins::NativeDawn
                 size_t dataOffset = static_cast<size_t>(ArgU64(info, 3, 0));
                 size_t length = (!ArgIsUndef(info, 4))
                     ? static_cast<size_t>(ArgU64(info, 4, 0)) : (bytes.size - dataOffset);
-                g_state.queue.WriteBuffer(*b, bufferOffset, bytes.data + dataOffset, length);
+                wgpuQueueWriteBuffer(g_state.queue, *b, bufferOffset, bytes.data + dataOffset, length);
                 return info.Env().Undefined();
             });
             SetMethod(o, "writeTexture", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 if (!info[0].IsObject()) return env.Undefined();
-                wgpu::TexelCopyTextureInfo tci = ParseTexelCopyTexture(info[0].As<Napi::Object>());
+                WGPUTexelCopyTextureInfo tci = ParseTexelCopyTexture(info[0].As<Napi::Object>());
                 Bytes bytes = GetBytes(info[1]);
                 Napi::Object layout = info[2].As<Napi::Object>();
-                wgpu::TexelCopyBufferLayout tbl{};
+                WGPUTexelCopyBufferLayout tbl = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
                 tbl.offset = PropU64(layout, "offset", 0);
                 tbl.bytesPerRow = PropPresent(layout, "bytesPerRow")
-                    ? PropU32(layout, "bytesPerRow", 0) : wgpu::kCopyStrideUndefined;
+                    ? PropU32(layout, "bytesPerRow", 0) : WGPU_COPY_STRIDE_UNDEFINED;
                 tbl.rowsPerImage = PropPresent(layout, "rowsPerImage")
-                    ? PropU32(layout, "rowsPerImage", 0) : wgpu::kCopyStrideUndefined;
-                wgpu::Extent3D ext = ParseExtent3D(info[3]);
+                    ? PropU32(layout, "rowsPerImage", 0) : WGPU_COPY_STRIDE_UNDEFINED;
+                WGPUExtent3D ext = ParseExtent3D(info[3]);
                 if (bytes.data != nullptr)
-                    g_state.queue.WriteTexture(&tci, bytes.data, bytes.size, &tbl, &ext);
+                    wgpuQueueWriteTexture(g_state.queue, &tci, bytes.data, bytes.size, &tbl, &ext);
                 return env.Undefined();
             });
             SetMethod(o, "copyExternalImageToTexture", [](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -2105,8 +2195,8 @@ namespace Babylon::Plugins::NativeDawn
                 }
 
                 Napi::Object destDesc = info[1].As<Napi::Object>();
-                wgpu::TexelCopyTextureInfo tci = ParseTexelCopyTexture(destDesc);
-                wgpu::Extent3D ext = ParseExtent3D(info[2]);
+                WGPUTexelCopyTextureInfo tci = ParseTexelCopyTexture(destDesc);
+                WGPUExtent3D ext = ParseExtent3D(info[2]);
                 if (ext.width == 0) ext.width = w;
                 if (ext.height == 0) ext.height = h;
                 if (ext.depthOrArrayLayers == 0) ext.depthOrArrayLayers = 1;
@@ -2120,8 +2210,8 @@ namespace Babylon::Plugins::NativeDawn
                 if (tci.texture)
                 {
                     const uint32_t mip = tci.mipLevel;
-                    uint32_t tw = tci.texture.GetWidth() >> mip;  if (tw == 0) tw = 1;
-                    uint32_t th = tci.texture.GetHeight() >> mip; if (th == 0) th = 1;
+                    uint32_t tw = wgpuTextureGetWidth(tci.texture) >> mip;  if (tw == 0) tw = 1;
+                    uint32_t th = wgpuTextureGetHeight(tci.texture) >> mip; if (th == 0) th = 1;
                     const uint32_t availW = (tci.origin.x < tw) ? (tw - tci.origin.x) : 0u;
                     const uint32_t availH = (tci.origin.y < th) ? (th - tci.origin.y) : 0u;
                     if (ext.width > availW) ext.width = availW;
@@ -2148,7 +2238,7 @@ namespace Babylon::Plugins::NativeDawn
                     return px.data + static_cast<size_t>(sy) * srcRowBytes;
                 };
 
-                wgpu::TexelCopyBufferLayout tbl{};
+                WGPUTexelCopyBufferLayout tbl = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
                 tbl.offset = 0;
                 tbl.rowsPerImage = h;
 
@@ -2166,7 +2256,7 @@ namespace Babylon::Plugins::NativeDawn
                         }
                     }
                     tbl.bytesPerRow = w * 8u;
-                    g_state.queue.WriteTexture(&tci, half.data(),
+                    wgpuQueueWriteTexture(g_state.queue, &tci, half.data(),
                         static_cast<size_t>(w) * h * 8u, &tbl, &ext);
                 }
                 else if (fmt == "rgba32float")
@@ -2182,7 +2272,7 @@ namespace Babylon::Plugins::NativeDawn
                         }
                     }
                     tbl.bytesPerRow = w * 16u;
-                    g_state.queue.WriteTexture(&tci, f.data(),
+                    wgpuQueueWriteTexture(g_state.queue, &tci, f.data(),
                         static_cast<size_t>(w) * h * 16u, &tbl, &ext);
                 }
                 else if (fmt == "bgra8unorm" || fmt == "bgra8unorm-srgb")
@@ -2202,7 +2292,7 @@ namespace Babylon::Plugins::NativeDawn
                         }
                     }
                     tbl.bytesPerRow = srcRowBytes;
-                    g_state.queue.WriteTexture(&tci, bgra.data(),
+                    wgpuQueueWriteTexture(g_state.queue, &tci, bgra.data(),
                         static_cast<size_t>(srcRowBytes) * h, &tbl, &ext);
                 }
                 else
@@ -2217,12 +2307,12 @@ namespace Babylon::Plugins::NativeDawn
                         {
                             std::memcpy(&flipped[static_cast<size_t>(y) * srcRowBytes], srcRow(y), srcRowBytes);
                         }
-                        g_state.queue.WriteTexture(&tci, flipped.data(),
+                        wgpuQueueWriteTexture(g_state.queue, &tci, flipped.data(),
                             static_cast<size_t>(srcRowBytes) * h, &tbl, &ext);
                     }
                     else
                     {
-                        g_state.queue.WriteTexture(&tci, px.data,
+                        wgpuQueueWriteTexture(g_state.queue, &tci, px.data,
                             static_cast<size_t>(srcRowBytes) * h, &tbl, &ext);
                     }
                 }
@@ -2231,9 +2321,10 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(o, "onSubmittedWorkDone", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 auto d = Napi::Promise::Deferred::New(env);
-                wgpu::Future f = g_state.queue.OnSubmittedWorkDone(wgpu::CallbackMode::WaitAnyOnly,
-                    [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {});
-                g_state.instance.WaitAny(f, UINT64_MAX);
+                WGPUQueueWorkDoneCallbackInfo cb = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
+                cb.mode = WGPUCallbackMode_WaitAnyOnly;
+                cb.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void*, void*) {};
+                WaitFuture(wgpuQueueOnSubmittedWorkDone(g_state.queue, cb));
                 d.Resolve(env.Undefined());
                 return d.Promise();
             });
@@ -2245,16 +2336,16 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeDevice(Napi::Env env)
         {
             Napi::Object o = NewGPUObject(env, "GPUDevice");
-            SetHandle(o, g_state.device);
+            SetBorrowedHandle(o, g_state.device);
             o.Set("queue", MakeQueue(env));
             o.Set("label", Napi::String::New(env, ""));
 
             o.Set("features", MakeFeatureSet(env, [](const std::string& name) {
-                return name.empty() ? false : static_cast<bool>(g_state.device.HasFeature(featureName(name)));
+                return name.empty() ? false : static_cast<bool>(wgpuDeviceHasFeature(g_state.device, featureName(name)));
             }));
             {
-                wgpu::Limits L{};
-                g_state.device.GetLimits(&L);
+                WGPULimits L = WGPU_LIMITS_INIT;
+                wgpuDeviceGetLimits(g_state.device, &L);
                 Napi::Object limits = Napi::Object::New(env);
                 FillLimits(limits, L);
                 o.Set("limits", limits);
@@ -2268,32 +2359,32 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(o, "createBuffer", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::BufferDescriptor bd{};
+                WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
                 bd.size = PropU64(desc, "size", 0);
                 uint32_t usage = PropU32(desc, "usage", 0);
-                bd.usage = wgpu::BufferUsage(usage);
+                bd.usage = WGPUBufferUsage(usage);
                 bool mapped = PropBool(desc, "mappedAtCreation", false);
                 bd.mappedAtCreation = mapped;
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) bd.label = label.c_str();
-                wgpu::Buffer buf = g_state.device.CreateBuffer(&bd);
+                if (!label.empty()) bd.label = StrView(label);
+                WGPUBuffer buf = wgpuDeviceCreateBuffer(g_state.device, &bd);
                 if (!buf) throw Napi::Error::New(env, "NativeDawn: createBuffer failed");
                 return MakeBuffer(env, buf, bd.size, usage, mapped);
             });
             SetMethod(o, "createTexture", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::TextureDescriptor td{};
+                WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
                 td.size = ParseExtent3D(desc.Get("size"));
                 td.mipLevelCount = PropU32(desc, "mipLevelCount", 1);
                 td.sampleCount = PropU32(desc, "sampleCount", 1);
                 std::string fmt = PropStr(desc, "format");
                 td.format = textureFormat(fmt);
                 uint32_t usage = PropU32(desc, "usage", 0);
-                td.usage = wgpu::TextureUsage(usage);
+                td.usage = WGPUTextureUsage(usage);
                 std::string dim = PropStr(desc, "dimension");
                 td.dimension = textureDimension(dim);
-                std::vector<wgpu::TextureFormat> viewFormats;
+                std::vector<WGPUTextureFormat> viewFormats;
                 Napi::Value vf = desc.Get("viewFormats");
                 if (vf.IsArray())
                 {
@@ -2307,15 +2398,15 @@ namespace Babylon::Plugins::NativeDawn
                     td.viewFormats = viewFormats.data();
                 }
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) td.label = label.c_str();
-                wgpu::Texture tex = g_state.device.CreateTexture(&td);
+                if (!label.empty()) td.label = StrView(label);
+                WGPUTexture tex = wgpuDeviceCreateTexture(g_state.device, &td);
                 if (!tex) throw Napi::Error::New(env, "NativeDawn: createTexture failed");
                 return MakeTexture(env, tex, td.size.width, td.size.height, td.size.depthOrArrayLayers,
                     td.mipLevelCount, td.sampleCount, fmt, usage, dim);
             });
             SetMethod(o, "createSampler", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::SamplerDescriptor sd{};
+                WGPUSamplerDescriptor sd = WGPU_SAMPLER_DESCRIPTOR_INIT;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     Napi::Object desc = info[0].As<Napi::Object>();
@@ -2330,27 +2421,27 @@ namespace Babylon::Plugins::NativeDawn
                     if (PropPresent(desc, "compare")) sd.compare = compareFunction(PropStr(desc, "compare"));
                     sd.maxAnisotropy = static_cast<uint16_t>(PropU32(desc, "maxAnisotropy", 1));
                 }
-                wgpu::Sampler s = g_state.device.CreateSampler(&sd);
+                WGPUSampler s = wgpuDeviceCreateSampler(g_state.device, &sd);
                 return MakeSampler(env, s);
             });
             SetMethod(o, "createShaderModule", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
                 std::string code = PropStr(desc, "code");
-                wgpu::ShaderSourceWGSL wgsl{};
-                wgsl.code = code.c_str();
-                wgpu::ShaderModuleDescriptor smd{};
-                smd.nextInChain = &wgsl;
+                WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
+                wgsl.code = StrView(code);
+                WGPUShaderModuleDescriptor smd = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+                smd.nextInChain = &wgsl.chain;
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) smd.label = label.c_str();
-                wgpu::ShaderModule m = g_state.device.CreateShaderModule(&smd);
+                if (!label.empty()) smd.label = StrView(label);
+                WGPUShaderModule m = wgpuDeviceCreateShaderModule(g_state.device, &smd);
                 return MakeShaderModule(env, m);
             });
             SetMethod(o, "createBindGroupLayout", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
                 Napi::Value entriesV = desc.Get("entries");
-                std::vector<wgpu::BindGroupLayoutEntry> entries;
+                std::vector<WGPUBindGroupLayoutEntry> entries;
                 if (entriesV.IsArray())
                 {
                     Napi::Array arr = entriesV.As<Napi::Array>();
@@ -2358,9 +2449,9 @@ namespace Babylon::Plugins::NativeDawn
                     for (uint32_t i = 0; i < arr.Length(); ++i)
                     {
                         Napi::Object e = arr.Get(i).As<Napi::Object>();
-                        wgpu::BindGroupLayoutEntry& dst = entries[i];
+                        WGPUBindGroupLayoutEntry& dst = entries[i];
                         dst.binding = PropU32(e, "binding", 0);
-                        dst.visibility = wgpu::ShaderStage(PropU32(e, "visibility", 0));
+                        dst.visibility = WGPUShaderStage(PropU32(e, "visibility", 0));
                         if (e.Get("buffer").IsObject())
                         {
                             Napi::Object b = e.Get("buffer").As<Napi::Object>();
@@ -2389,21 +2480,21 @@ namespace Babylon::Plugins::NativeDawn
                         }
                     }
                 }
-                wgpu::BindGroupLayoutDescriptor bgld{};
+                WGPUBindGroupLayoutDescriptor bgld = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
                 bgld.entryCount = entries.size();
                 bgld.entries = entries.empty() ? nullptr : entries.data();
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) bgld.label = label.c_str();
-                wgpu::BindGroupLayout bgl = g_state.device.CreateBindGroupLayout(&bgld);
+                if (!label.empty()) bgld.label = StrView(label);
+                WGPUBindGroupLayout bgl = wgpuDeviceCreateBindGroupLayout(g_state.device, &bgld);
                 return MakeBindGroupLayout(env, bgl);
             });
             SetMethod(o, "createBindGroup", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::BindGroupLayout* layout = GetH<wgpu::BindGroupLayout>(desc.Get("layout"));
+                WGPUBindGroupLayout* layout = GetH<WGPUBindGroupLayout>(desc.Get("layout"));
                 if (layout == nullptr) throw Napi::Error::New(env, "NativeDawn: createBindGroup missing layout");
                 Napi::Value entriesV = desc.Get("entries");
-                std::vector<wgpu::BindGroupEntry> entries;
+                std::vector<WGPUBindGroupEntry> entries;
                 if (entriesV.IsArray())
                 {
                     Napi::Array arr = entriesV.As<Napi::Array>();
@@ -2411,19 +2502,19 @@ namespace Babylon::Plugins::NativeDawn
                     for (uint32_t i = 0; i < arr.Length(); ++i)
                     {
                         Napi::Object e = arr.Get(i).As<Napi::Object>();
-                        wgpu::BindGroupEntry& dst = entries[i];
+                        WGPUBindGroupEntry& dst = entries[i];
                         dst.binding = PropU32(e, "binding", 0);
                         Napi::Value resource = e.Get("resource");
                         if (!resource.IsObject()) continue;
                         Napi::Object ro = resource.As<Napi::Object>();
                         if (ro.Has("buffer") && ro.Get("buffer").IsObject())
                         {
-                            wgpu::Buffer* b = GetH<wgpu::Buffer>(ro.Get("buffer"));
+                            WGPUBuffer* b = GetH<WGPUBuffer>(ro.Get("buffer"));
                             if (b != nullptr)
                             {
                                 dst.buffer = *b;
                                 dst.offset = PropU64(ro, "offset", 0);
-                                dst.size = PropPresent(ro, "size") ? PropU64(ro, "size", 0) : wgpu::kWholeSize;
+                                dst.size = PropPresent(ro, "size") ? PropU64(ro, "size", 0) : WGPU_WHOLE_SIZE;
                             }
                         }
                         else
@@ -2431,46 +2522,46 @@ namespace Babylon::Plugins::NativeDawn
                             std::string ty = TypeTag(resource);
                             if (ty == "GPUSampler")
                             {
-                                wgpu::Sampler* s = GetH<wgpu::Sampler>(resource);
+                                WGPUSampler* s = GetH<WGPUSampler>(resource);
                                 if (s != nullptr) dst.sampler = *s;
                             }
                             else if (ty == "GPUTextureView")
                             {
-                                wgpu::TextureView* v = GetH<wgpu::TextureView>(resource);
+                                WGPUTextureView* v = GetH<WGPUTextureView>(resource);
                                 if (v != nullptr) dst.textureView = *v;
                             }
                         }
                     }
                 }
-                wgpu::BindGroupDescriptor bgd{};
+                WGPUBindGroupDescriptor bgd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
                 bgd.layout = *layout;
                 bgd.entryCount = entries.size();
                 bgd.entries = entries.empty() ? nullptr : entries.data();
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) bgd.label = label.c_str();
-                wgpu::BindGroup bg = g_state.device.CreateBindGroup(&bgd);
+                if (!label.empty()) bgd.label = StrView(label);
+                WGPUBindGroup bg = wgpuDeviceCreateBindGroup(g_state.device, &bgd);
                 return MakeBindGroup(env, bg);
             });
             SetMethod(o, "createPipelineLayout", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                std::vector<wgpu::BindGroupLayout> layouts;
+                std::vector<WGPUBindGroupLayout> layouts;
                 Napi::Value bglsV = desc.Get("bindGroupLayouts");
                 if (bglsV.IsArray())
                 {
                     Napi::Array arr = bglsV.As<Napi::Array>();
                     for (uint32_t i = 0; i < arr.Length(); ++i)
                     {
-                        wgpu::BindGroupLayout* l = GetH<wgpu::BindGroupLayout>(arr.Get(i));
+                        WGPUBindGroupLayout* l = GetH<WGPUBindGroupLayout>(arr.Get(i));
                         if (l != nullptr) layouts.push_back(*l);
                     }
                 }
-                wgpu::PipelineLayoutDescriptor pld{};
+                WGPUPipelineLayoutDescriptor pld = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
                 pld.bindGroupLayoutCount = layouts.size();
                 pld.bindGroupLayouts = layouts.empty() ? nullptr : layouts.data();
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) pld.label = label.c_str();
-                wgpu::PipelineLayout pl = g_state.device.CreatePipelineLayout(&pld);
+                if (!label.empty()) pld.label = StrView(label);
+                WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(g_state.device, &pld);
                 return MakePipelineLayout(env, pl);
             });
             SetMethod(o, "createRenderPipeline", [](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -2493,20 +2584,20 @@ namespace Babylon::Plugins::NativeDawn
             });
             SetMethod(o, "createCommandEncoder", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::CommandEncoderDescriptor ced{};
+                WGPUCommandEncoderDescriptor ced = WGPU_COMMAND_ENCODER_DESCRIPTOR_INIT;
                 std::string label;
                 if (info.Length() > 0 && info[0].IsObject())
                 {
                     label = PropStr(info[0].As<Napi::Object>(), "label");
-                    if (!label.empty()) ced.label = label.c_str();
+                    if (!label.empty()) ced.label = StrView(label);
                 }
-                return MakeCommandEncoder(env, g_state.device.CreateCommandEncoder(&ced));
+                return MakeCommandEncoder(env, wgpuDeviceCreateCommandEncoder(g_state.device, &ced));
             });
             SetMethod(o, "createRenderBundleEncoder", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::RenderBundleEncoderDescriptor rbed{};
-                std::vector<wgpu::TextureFormat> cf;
+                WGPURenderBundleEncoderDescriptor rbed = WGPU_RENDER_BUNDLE_ENCODER_DESCRIPTOR_INIT;
+                std::vector<WGPUTextureFormat> cf;
                 Napi::Value cfV = desc.Get("colorFormats");
                 if (cfV.IsArray())
                 {
@@ -2515,7 +2606,7 @@ namespace Babylon::Plugins::NativeDawn
                     {
                         Napi::Value e = a.Get(i);
                         cf.push_back(e.IsString() ? textureFormat(e.As<Napi::String>().Utf8Value())
-                                                  : wgpu::TextureFormat::Undefined);
+                                                  : WGPUTextureFormat_Undefined);
                     }
                 }
                 rbed.colorFormatCount = cf.size();
@@ -2526,17 +2617,17 @@ namespace Babylon::Plugins::NativeDawn
                 rbed.depthReadOnly = PropBool(desc, "depthReadOnly", false);
                 rbed.stencilReadOnly = PropBool(desc, "stencilReadOnly", false);
                 std::string label = PropStr(desc, "label");
-                if (!label.empty()) rbed.label = label.c_str();
-                return MakeRenderBundleEncoder(env, g_state.device.CreateRenderBundleEncoder(&rbed));
+                if (!label.empty()) rbed.label = StrView(label);
+                return MakeRenderBundleEncoder(env, wgpuDeviceCreateRenderBundleEncoder(g_state.device, &rbed));
             });
             SetMethod(o, "createQuerySet", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 Napi::Object desc = info[0].As<Napi::Object>();
-                wgpu::QuerySetDescriptor qsd{};
+                WGPUQuerySetDescriptor qsd = WGPU_QUERY_SET_DESCRIPTOR_INIT;
                 qsd.type = queryType(PropStr(desc, "type"));
                 uint32_t count = PropU32(desc, "count", 0);
                 qsd.count = count;
-                return MakeQuerySet(env, g_state.device.CreateQuerySet(&qsd), count);
+                return MakeQuerySet(env, wgpuDeviceCreateQuerySet(g_state.device, &qsd), count);
             });
             SetMethod(o, "pushErrorScope", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 return info.Env().Undefined();
@@ -2564,27 +2655,28 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeAdapterInfo(Napi::Env env)
         {
             Napi::Object i = Napi::Object::New(env);
-            wgpu::AdapterInfo info{};
-            g_state.adapter.GetInfo(&info);
+            WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
+            wgpuAdapterGetInfo(g_state.adapter, &info);
             i.Set("vendor", Napi::String::New(env, SvToStr(info.vendor)));
             i.Set("architecture", Napi::String::New(env, SvToStr(info.architecture)));
             i.Set("device", Napi::String::New(env, SvToStr(info.device)));
             i.Set("description", Napi::String::New(env, SvToStr(info.description)));
+            wgpuAdapterInfoFreeMembers(info);
             return i;
         }
 
         Napi::Object MakeAdapter(Napi::Env env)
         {
             Napi::Object o = NewGPUObject(env, "GPUAdapter");
-            SetHandle(o, g_state.adapter);
+            SetBorrowedHandle(o, g_state.adapter);
             o.Set("isFallbackAdapter", Napi::Boolean::New(env, false));
 
             o.Set("features", MakeFeatureSet(env, [](const std::string& name) {
-                return name.empty() ? false : static_cast<bool>(g_state.adapter.HasFeature(featureName(name)));
+                return name.empty() ? false : static_cast<bool>(wgpuAdapterHasFeature(g_state.adapter, featureName(name)));
             }));
             {
-                wgpu::Limits L{};
-                g_state.adapter.GetLimits(&L);
+                WGPULimits L = WGPU_LIMITS_INIT;
+                wgpuAdapterGetLimits(g_state.adapter, &L);
                 Napi::Object limits = Napi::Object::New(env);
                 FillLimits(limits, L);
                 o.Set("limits", limits);
@@ -2614,41 +2706,43 @@ namespace Babylon::Plugins::NativeDawn
                 if (info.Length() == 0 || !info[0].IsObject()) return env.Undefined();
                 Napi::Object desc = info[0].As<Napi::Object>();
                 std::string fmt = PropStr(desc, "format");
-                wgpu::TextureFormat f = fmt.empty() ? g_state.surfaceFormat : textureFormat(fmt);
+                WGPUTextureFormat f = fmt.empty() ? g_state.surfaceFormat : textureFormat(fmt);
                 g_state.surfaceFormat = f;
-                wgpu::SurfaceConfiguration cfg{};
+                WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
                 cfg.device = g_state.device;
                 cfg.format = f;
-                uint32_t usage = PropU32(desc, "usage", static_cast<uint32_t>(wgpu::TextureUsage::RenderAttachment));
-                cfg.usage = wgpu::TextureUsage(usage | static_cast<uint32_t>(wgpu::TextureUsage::CopySrc));
+                uint32_t usage = PropU32(desc, "usage", static_cast<uint32_t>(WGPUTextureUsage_RenderAttachment));
+                cfg.usage = WGPUTextureUsage(usage | static_cast<uint32_t>(WGPUTextureUsage_CopySrc));
                 cfg.width = g_state.width > 1 ? g_state.width : 1;
                 cfg.height = g_state.height > 1 ? g_state.height : 1;
                 std::string am = PropStr(desc, "alphaMode");
                 cfg.alphaMode = (am == "premultiplied")
-                    ? wgpu::CompositeAlphaMode::Premultiplied : wgpu::CompositeAlphaMode::Opaque;
-                cfg.presentMode = wgpu::PresentMode::Fifo;
-                g_state.surface.Configure(&cfg);
+                    ? WGPUCompositeAlphaMode_Premultiplied : WGPUCompositeAlphaMode_Opaque;
+                cfg.presentMode = WGPUPresentMode_Fifo;
+                wgpuSurfaceConfigure(g_state.surface, &cfg);
                 g_surfaceConfigured = true;
                 return env.Undefined();
             });
             SetMethod(o, "unconfigure", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 if (g_surfaceConfigured)
                 {
-                    g_state.surface.Unconfigure();
+                    wgpuSurfaceUnconfigure(g_state.surface);
                     g_surfaceConfigured = false;
                 }
                 return info.Env().Undefined();
             });
             SetMethod(o, "getCurrentTexture", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                wgpu::SurfaceTexture st{};
-                g_state.surface.GetCurrentTexture(&st);
+                WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
+                wgpuSurfaceGetCurrentTexture(g_state.surface, &st);
                 if (!st.texture) throw Napi::Error::New(env, "NativeDawn: getCurrentTexture returned null");
                 g_currentTextureAcquired = true;
+                if (g_state.currentSurfaceTexture) wgpuTextureRelease(g_state.currentSurfaceTexture);
+                wgpuTextureAddRef(st.texture);
                 g_state.currentSurfaceTexture = st.texture;
                 return MakeTexture(env, st.texture, g_state.width, g_state.height, 1, 1, 1,
                     textureFormatStr(g_state.surfaceFormat),
-                    static_cast<uint32_t>(wgpu::TextureUsage::RenderAttachment), "2d");
+                    static_cast<uint32_t>(WGPUTextureUsage_RenderAttachment), "2d");
             });
             SetMethod(o, "getConfiguration", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
@@ -2702,12 +2796,12 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(global, "_nativeDawnPresent", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 if (g_surfaceConfigured && g_currentTextureAcquired)
                 {
-                    g_state.surface.Present();
+                    wgpuSurfacePresent(g_state.surface);
                 }
                 g_currentTextureAcquired = false;
                 if (g_state.instance)
                 {
-                    g_state.instance.ProcessEvents();
+                    wgpuInstanceProcessEvents(g_state.instance);
                 }
                 return info.Env().Undefined();
             });
@@ -2737,39 +2831,42 @@ namespace Babylon::Plugins::NativeDawn
                 const uint32_t padded = (unpadded + 255u) & ~255u;
                 const uint64_t bufSize = static_cast<uint64_t>(padded) * h;
 
-                wgpu::BufferDescriptor bd{};
+                WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
                 bd.size = bufSize;
-                bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-                wgpu::Buffer buf = g_state.device.CreateBuffer(&bd);
+                bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+                WGPUBuffer buf = wgpuDeviceCreateBuffer(g_state.device, &bd);
 
-                wgpu::TexelCopyTextureInfo src{};
+                WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
                 src.texture = g_state.currentSurfaceTexture;
                 src.mipLevel = 0;
                 src.origin = {0, 0, 0};
-                src.aspect = wgpu::TextureAspect::All;
-                wgpu::TexelCopyBufferInfo dst{};
+                src.aspect = WGPUTextureAspect_All;
+                WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
                 dst.buffer = buf;
                 dst.layout.offset = 0;
                 dst.layout.bytesPerRow = padded;
                 dst.layout.rowsPerImage = h;
-                wgpu::Extent3D ext{w, h, 1};
+                WGPUExtent3D ext = WGPU_EXTENT_3D_INIT;
+                ext.width = w;
+                ext.height = h;
+                ext.depthOrArrayLayers = 1;
 
-                wgpu::CommandEncoder enc = g_state.device.CreateCommandEncoder();
-                enc.CopyTextureToBuffer(&src, &dst, &ext);
-                wgpu::CommandBuffer cmd = enc.Finish();
-                g_state.queue.Submit(1, &cmd);
+                WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(g_state.device, nullptr);
+                wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &ext);
+                WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
+                wgpuQueueSubmit(g_state.queue, 1, &cmd);
 
-                wgpu::Future f = buf.MapAsync(wgpu::MapMode::Read, 0, bufSize,
-                    wgpu::CallbackMode::WaitAnyOnly,
-                    [](wgpu::MapAsyncStatus, wgpu::StringView) {});
-                g_state.instance.WaitAny(f, UINT64_MAX);
+                WGPUBufferMapCallbackInfo mapCb = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+                mapCb.mode = WGPUCallbackMode_WaitAnyOnly;
+                mapCb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void*, void*) {};
+                WaitFuture(wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bufSize, mapCb));
 
-                const uint8_t* mapped = static_cast<const uint8_t*>(buf.GetConstMappedRange(0, bufSize));
+                const uint8_t* mapped = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bufSize));
                 const size_t outSize = static_cast<size_t>(unpadded) * h;
                 Napi::ArrayBuffer ab = Napi::ArrayBuffer::New(env, outSize);
                 uint8_t* out = static_cast<uint8_t*>(ab.Data());
-                const bool bgra = (g_state.surfaceFormat == wgpu::TextureFormat::BGRA8Unorm ||
-                                   g_state.surfaceFormat == wgpu::TextureFormat::BGRA8UnormSrgb);
+                const bool bgra = (g_state.surfaceFormat == WGPUTextureFormat_BGRA8Unorm ||
+                                   g_state.surfaceFormat == WGPUTextureFormat_BGRA8UnormSrgb);
                 if (mapped != nullptr)
                 {
                     for (uint32_t y = 0; y < h; ++y)
@@ -2799,7 +2896,10 @@ namespace Babylon::Plugins::NativeDawn
                         }
                     }
                 }
-                buf.Unmap();
+                wgpuBufferUnmap(buf);
+                wgpuCommandBufferRelease(cmd);
+                wgpuCommandEncoderRelease(enc);
+                wgpuBufferRelease(buf);
 
                 Napi::Object res = Napi::Object::New(env);
                 res.Set("width", Napi::Number::New(env, w));
@@ -2832,14 +2932,14 @@ namespace Babylon::Plugins::NativeDawn
 #endif
                 if (g_surfaceConfigured)
                 {
-                    wgpu::SurfaceConfiguration cfg{};
+                    WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
                     cfg.device = g_state.device;
                     cfg.format = g_state.surfaceFormat;
-                    cfg.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+                    cfg.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
                     cfg.width = w;
                     cfg.height = h;
-                    cfg.presentMode = wgpu::PresentMode::Fifo;
-                    g_state.surface.Configure(&cfg);
+                    cfg.presentMode = WGPUPresentMode_Fifo;
+                    wgpuSurfaceConfigure(g_state.surface, &cfg);
                 }
                 return env.Undefined();
             });
@@ -4062,12 +4162,12 @@ namespace Babylon::Plugins::NativeDawn
                 // Present the frame.
                 if (g_surfaceConfigured && g_currentTextureAcquired)
                 {
-                    g_state.surface.Present();
+                    wgpuSurfacePresent(g_state.surface);
                 }
                 g_currentTextureAcquired = false;
                 if (g_state.instance)
                 {
-                    g_state.instance.ProcessEvents();
+                    wgpuInstanceProcessEvents(g_state.instance);
                 }
                 // Retire GPU resources whose deferred-destroy delay has elapsed
                 // (see DeferDestroy). Runs after ProcessEvents so completed
@@ -4340,7 +4440,7 @@ namespace Babylon::Plugins::NativeDawn
     {
         if (g_state.ready)
         {
-            g_state.instance.ProcessEvents();
+            wgpuInstanceProcessEvents(g_state.instance);
         }
     }
 
@@ -4359,18 +4459,19 @@ namespace Babylon::Plugins::NativeDawn
         g_state.width = width;
         g_state.height = height;
         // Drop the cached current texture (it belongs to the old swapchain).
+        if (g_state.currentSurfaceTexture) wgpuTextureRelease(g_state.currentSurfaceTexture);
         g_state.currentSurfaceTexture = nullptr;
         g_currentTextureAcquired = false;
         if (g_surfaceConfigured)
         {
-            wgpu::SurfaceConfiguration cfg{};
+            WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
             cfg.device = g_state.device;
             cfg.format = g_state.surfaceFormat;
-            cfg.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+            cfg.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
             cfg.width = width;
             cfg.height = height;
-            cfg.presentMode = wgpu::PresentMode::Fifo;
-            g_state.surface.Configure(&cfg);
+            cfg.presentMode = WGPUPresentMode_Fifo;
+            wgpuSurfaceConfigure(g_state.surface, &cfg);
         }
     }
 }
