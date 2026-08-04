@@ -4466,6 +4466,58 @@ namespace Babylon::Plugins::NativeDawn
         }
     }
 
+    void Deinitialize(Napi::Env env)
+    {
+        // These references must be reset before Napi::Detach. Leaving them for
+        // static destruction makes napi_delete_reference dereference a dead
+        // napi_env during the CRT on-exit pass.
+        g_readbackPending = false;
+        g_readbackCallback.Reset();
+        g_rafQueue.clear();
+        g_blobRegistry.Reset();
+        g_bootstrapCanvas.Reset();
+        g_babylon.Reset();
+        g_engineStarted = false;
+        g_blobSeq = 0;
+
+        // Drain deferred wrapper finalizers while both the N-API environment and
+        // the Dawn device are valid.
+        PumpJsFinalizers(env, true);
+
+        // Deferred destroy callbacks own an extra resource reference. Run them
+        // before releasing the plugin's device and instance references.
+        for (auto& pending : g_pendingDestroy)
+        {
+            pending.second();
+        }
+        g_pendingDestroy.clear();
+
+        if (g_state.currentSurfaceTexture)
+        {
+            wgpuTextureRelease(g_state.currentSurfaceTexture);
+            g_state.currentSurfaceTexture = nullptr;
+        }
+        g_currentTextureAcquired = false;
+
+        if (g_surfaceConfigured && g_state.surface)
+        {
+            wgpuSurfaceUnconfigure(g_state.surface);
+        }
+        g_surfaceConfigured = false;
+
+        if (g_state.surface) wgpuSurfaceRelease(g_state.surface);
+        if (g_state.queue) wgpuQueueRelease(g_state.queue);
+        if (g_state.device) wgpuDeviceRelease(g_state.device);
+        if (g_state.adapter) wgpuAdapterRelease(g_state.adapter);
+        if (g_state.instance) wgpuInstanceRelease(g_state.instance);
+
+        g_state = {};
+        g_wrappersCreated = 0;
+#if defined(NATIVEDAWN_V8_FINALIZER_DRAIN)
+        g_wrappersAtLastPump = 0;
+#endif
+    }
+
     void Tick(Napi::Env)
     {
         if (g_state.ready)
