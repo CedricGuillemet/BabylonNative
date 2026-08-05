@@ -405,6 +405,31 @@ if(MSVC)
 
     # Enable multiprocessor compilation for faster builds
     add_compile_options(/MP)
+
+    # Strip unreferenced code from RelWithDebInfo binaries.
+    #
+    # MSVC turns /OPT:REF and /OPT:ICF off whenever /DEBUG is passed, and CMake's
+    # default RelWithDebInfo link flags are "/debug /INCREMENTAL". The effect is that
+    # RelWithDebInfo keeps every unreferenced COMDAT that made it into the static
+    # libraries. Measured on a Windows/D3D12 Playground build with NativeDawn enabled,
+    # Playground.exe went from 26,670,592 bytes to 8,902,144 bytes (-66.6%; .text
+    # 19,636,736 -> 6,209,536) with identical validation results.
+    #
+    # /OPT:REF alone captures the entire win here (/OPT:ICF measured zero additional
+    # bytes), so identical functions are left unfolded and stack traces stay
+    # unambiguous. Incremental linking must be off because it is incompatible with
+    # /OPT:REF. Debug is left untouched, and Release/MinSizeRel already get /OPT:REF
+    # implicitly because they do not link with /DEBUG.
+    foreach(BABYLON_NATIVE_LINKER_FLAGS
+        CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
+        CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO
+        CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO)
+        set(BABYLON_NATIVE_FLAGS "${${BABYLON_NATIVE_LINKER_FLAGS}}")
+        string(REPLACE "/INCREMENTAL:NO" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
+        string(REPLACE "/INCREMENTAL" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
+        string(REPLACE "/OPT:REF" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
+        set(${BABYLON_NATIVE_LINKER_FLAGS} "${BABYLON_NATIVE_FLAGS} /INCREMENTAL:NO /OPT:REF")
+    endforeach()
 endif()
 
 if(APPLE)
@@ -436,6 +461,25 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEDAWN)
     set(DAWN_USE_WAYLAND OFF CACHE BOOL "" FORCE)
     set(TINT_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
     set(TINT_BUILD_CMD_TOOLS OFF CACHE BOOL "" FORCE)
+
+    # protobuf (and libprotobuf-mutator) are only needed by Dawn's fuzzers and by
+    # Tint's IR binary format, both of which are off here. Turning this off avoids
+    # fetching and building protobuf entirely; it contributes no linked code.
+    set(DAWN_BUILD_PROTOBUF  OFF CACHE BOOL "" FORCE)
+    set(DAWN_BUILD_FUZZERS   OFF CACHE BOOL "" FORCE)
+    set(DAWN_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+    # SPIR-V validation runs SPIRV-Tools over every generated shader. It only
+    # applies to the OpenGL/Vulkan backends, so it is inert on D3D12/Metal but
+    # links the SPIRV-Tools validator into dawn_native on the Vulkan
+    # (Android/Linux) path. Tint already validates the WGSL it consumes, and Dawn
+    # generates the SPIR-V itself, so this is a debugging aid rather than a
+    # correctness requirement.
+    set(DAWN_ENABLE_SPIRV_VALIDATION OFF CACHE BOOL "" FORCE)
+
+    # Assertions and RTTI stay off in shipping builds.
+    set(DAWN_ALWAYS_ASSERT OFF CACHE BOOL "" FORCE)
+    set(DAWN_ENABLE_RTTI   OFF CACHE BOOL "" FORCE)
 
     # Build exactly one GPU backend per platform, with the matching Tint shader
     # writer. The WGSL reader (input) is always required; the SPIR-V/GLSL readers,
