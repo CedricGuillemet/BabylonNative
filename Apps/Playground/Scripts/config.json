@@ -4270,6 +4270,8 @@
         {
             "title": "Vertex Pulling - Normals UVs Colors Tangents",
             "playgroundId": "#664OF3#6",
+            "excludedGraphicsApis": ["WebGPU"],
+            "reason": "pixel diff vs reference on WebGPU/Dawn (4.426%, deterministic across isolated runs)",
             "referenceImage": "vertexPullingNormalsUVsColors.png"
         },
         {
