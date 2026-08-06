@@ -456,7 +456,7 @@
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 0, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode0.png",
             "errorRatio": 8.0,
-            "reason": "LineLoop is an unsupported fill mode in WebGPU"
+            "reason": "upstream Babylon.js gap, not Dawn: the Mesh_PrimitiveMode asset uses glTF LINE_LOOP/TRIANGLE_FAN, which WebGPU has no topology for, so WebGPUCacheRenderPipeline._GetTopology throws (see the TODO WEBGPU Line Loop Mode Fallback in webgpuCacheRenderPipeline.ts). Affects browser WebGPU identically. Emulating the topologies makes both tests pass on Dawn (2.740% and 2.667% against the 8% errorRatio), so the fix belongs in the Babylon.js loader/mesh layer as an index rewrite (LINE_LOOP to line-strip with the first index repeated, TRIANGLE_FAN to triangle-list)"
         },
         {
             "excludedGraphicsApis": ["WebGPU"],
@@ -465,7 +465,7 @@
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 1, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode1.png",
             "errorRatio": 8.0,
-            "reason": "LineLoop is an unsupported fill mode in WebGPU"
+            "reason": "upstream Babylon.js gap, not Dawn: the Mesh_PrimitiveMode asset uses glTF LINE_LOOP/TRIANGLE_FAN, which WebGPU has no topology for, so WebGPUCacheRenderPipeline._GetTopology throws (see the TODO WEBGPU Line Loop Mode Fallback in webgpuCacheRenderPipeline.ts). Affects browser WebGPU identically. Emulating the topologies makes both tests pass on Dawn (2.740% and 2.667% against the 8% errorRatio), so the fix belongs in the Babylon.js loader/mesh layer as an index rewrite (LINE_LOOP to line-strip with the first index repeated, TRIANGLE_FAN to triangle-list)"
         },
         {
             "title": "GLTF Mesh Primitives",
