@@ -305,27 +305,23 @@
             "referenceImage": "multiCameraRenderingWithScissors.png"
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test",
             "playgroundId": "#W7E7CF#34",
-            "referenceImage": "scissor-test.png",
-            "reason": "surface texture destroyed mid-frame then used in a submit ('Destroyed texture [Texture \"of [Surface]\"] used in a submit'), blanking the frame (95.693% pixel diff); unrelated to scissor clamping"
+            "referenceImage": "scissor-test.png"
         },
         {
             "title": "Scissor test with 0.9 hardware scaling",
             "playgroundId": "#W7E7CF#34",
             "replace": "//options//, hardwareScalingLevel = 0.9;",
             "referenceImage": "scissor-test-2.png",
-            "excludedGraphicsApis": ["OpenGL", "WebGPU"],
+            "excludedGraphicsApis": ["OpenGL"],
             "reason": "State-leak cascade fixed in validation_native.js (stencil/scissor reset between tests); pixel diff fail on Linux OpenGL (56223 px) under 0.9 hardware scaling; passes on Win32 D3D11."
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with 1.5 hardware scaling",
             "playgroundId": "#W7E7CF#34",
             "replace": "//options//, hardwareScalingLevel = 1.5;",
-            "referenceImage": "scissor-test-3.png",
-            "reason": "WebGPU/Dawn readback stays 600x400 while hardware scaling produces a 425600-byte reference (render data is 960000 bytes)"
+            "referenceImage": "scissor-test-3.png"
         },
         {
             "title": "Scissor test with negative x and y",
@@ -1957,16 +1953,14 @@
             "playgroundId": "#W7E7CF#38",
             "replace": "//options//, hardwareScalingLevel = 0.9;",
             "referenceImage": "scissor-test-2.png",
-            "excludedGraphicsApis": ["OpenGL", "WebGPU"],
+            "excludedGraphicsApis": ["OpenGL"],
             "reason": "State-leak cascade fixed in validation_native.js (stencil/scissor reset between tests); pixel diff fail on Linux OpenGL (56223 px) under 0.9 hardware scaling; passes on Win32 D3D11."
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with 1.5 hardware scaling",
             "playgroundId": "#W7E7CF#38",
             "replace": "//options//, hardwareScalingLevel = 1.5;",
-            "referenceImage": "scissor-test-3.png",
-            "reason": "WebGPU/Dawn readback stays 600x400 while hardware scaling produces a 425600-byte reference (render data is 960000 bytes)"
+            "referenceImage": "scissor-test-3.png"
         },
         {
             "title": "Refraction local cube map STD",

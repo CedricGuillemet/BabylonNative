@@ -41,6 +41,7 @@
 #include <string>
 #include <string_view>
 #include <functional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -70,6 +71,97 @@ namespace Babylon::Plugins::NativeDawn
         };
 
         State g_state;
+
+        std::string SvToStr(const WGPUStringView& sv)
+        {
+            if (sv.data == nullptr) return {};
+            if (sv.length == static_cast<size_t>(-1)) return std::string(sv.data);
+            return std::string(sv.data, sv.length);
+        }
+
+        // ---- Diagnostics -----------------------------------------------------
+        // Everything NativeDawn reports -- Dawn validation/device errors included
+        // -- goes through here so it lands in the same place as the rest of
+        // Babylon Native's diagnostics: the JS console. Hosts already install a
+        // Babylon::Polyfills::Console callback to capture engine output, so
+        // routing through console.error/warn/log means Dawn's validation messages
+        // show up in the app log, in the Playground's test output, and in any
+        // host-side log sink, instead of vanishing onto raw stderr where nothing
+        // is listening.
+        //
+        // Calling into JS is only safe on the JS thread with no exception in
+        // flight, and Dawn can surface errors before the environment exists (for
+        // example while the adapter is still being created). Whenever that is the
+        // case we fall back to stderr so a message is never simply dropped.
+        enum class LogLevel
+        {
+            Log,
+            Warn,
+            Error,
+        };
+
+        napi_env g_logEnv{};
+        std::thread::id g_jsThreadId{};
+        bool g_inLogCallback = false;
+
+        void LogToStderr(LogLevel level, const char* msg)
+        {
+            const char* tag = level == LogLevel::Error ? "error" : (level == LogLevel::Warn ? "warning" : "info");
+            std::fprintf(stderr, "[NativeDawn] %s: %s\n", tag, msg);
+            std::fflush(stderr);
+        }
+
+        void DawnLog(LogLevel level, const std::string& message)
+        {
+            // Re-entrancy guard: console.* is JS, and anything it triggers could
+            // fault back into Dawn and log again.
+            if (g_logEnv == nullptr || std::this_thread::get_id() != g_jsThreadId || g_inLogCallback)
+            {
+                LogToStderr(level, message.c_str());
+                return;
+            }
+
+            g_inLogCallback = true;
+            bool delivered = false;
+            try
+            {
+                Napi::Env env{g_logEnv};
+                Napi::HandleScope scope{env};
+                if (!env.IsExceptionPending())
+                {
+                    Napi::Value consoleV = env.Global().Get("console");
+                    if (consoleV.IsObject())
+                    {
+                        const char* method = level == LogLevel::Error ? "error" : (level == LogLevel::Warn ? "warn" : "log");
+                        Napi::Value fnV = consoleV.As<Napi::Object>().Get(method);
+                        if (fnV.IsFunction())
+                        {
+                            fnV.As<Napi::Function>().Call(consoleV, {Napi::String::New(env, "[NativeDawn] " + message)});
+                            delivered = true;
+                        }
+                    }
+                }
+            }
+            catch (...)
+            {
+                delivered = false;
+            }
+            g_inLogCallback = false;
+
+            if (!delivered)
+            {
+                LogToStderr(level, message.c_str());
+            }
+        }
+
+        // printf-style convenience so the existing call sites stay readable.
+        template<typename... Args>
+        void DawnLogF(LogLevel level, const char* fmt, Args... args)
+        {
+            std::array<char, 2048> buf{};
+            const int n = std::snprintf(buf.data(), buf.size(), fmt, args...);
+            DawnLog(level, n < 0 ? fmt : std::string{buf.data(), static_cast<size_t>(std::min<int>(n, static_cast<int>(buf.size()) - 1))});
+        }
 
         constexpr WGPUStringView EmptyStringView()
         {
@@ -104,8 +196,38 @@ namespace Babylon::Plugins::NativeDawn
 
         void LogDeviceError(WGPUDevice const*, WGPUErrorType type, WGPUStringView message, void*, void*)
         {
-            std::fprintf(stderr, "[NativeDawn] device error (%d): %.*s\n",
-                static_cast<int>(type), static_cast<int>(message.length), message.data);
+            const char* kind = "device error";
+            switch (type)
+            {
+                case WGPUErrorType_Validation: kind = "validation error"; break;
+                case WGPUErrorType_OutOfMemory: kind = "out-of-memory error"; break;
+                case WGPUErrorType_Internal: kind = "internal error"; break;
+                case WGPUErrorType_Unknown: kind = "unknown error"; break;
+                default: break;
+            }
+
+            std::string text = std::string{kind} + ": " + SvToStr(message);
+
+            // A broken pipeline usually re-raises the same error on every frame,
+            // and each one costs a Diagnostics banner plus a native callstack, so
+            // collapse consecutive duplicates and report the count once the error
+            // changes. The first occurrence is always logged in full.
+            static std::string lastText;
+            static uint64_t repeats = 0;
+            if (text == lastText)
+            {
+                ++repeats;
+                return;
+            }
+            if (repeats > 0)
+            {
+                DawnLogF(LogLevel::Error, "previous error repeated %llu more time(s)",
+                    static_cast<unsigned long long>(repeats));
+            }
+            lastText = text;
+            repeats = 0;
+
+            DawnLog(LogLevel::Error, text);
         }
 
         // Blocks the calling thread until `f` resolves. The C API has no
@@ -133,7 +255,7 @@ namespace Babylon::Plugins::NativeDawn
             g_state.instance = wgpuCreateInstance(&instDesc);
             if (!g_state.instance)
             {
-                std::fprintf(stderr, "[NativeDawn] CreateInstance failed\n");
+                DawnLog(LogLevel::Error, "CreateInstance failed");
                 return false;
             }
 
@@ -155,8 +277,7 @@ namespace Babylon::Plugins::NativeDawn
                     }
                     else
                     {
-                        std::fprintf(stderr, "[NativeDawn] RequestAdapter failed: %.*s\n",
-                            static_cast<int>(message.length), message.data);
+                        DawnLog(LogLevel::Error, "RequestAdapter failed: " + SvToStr(message));
                     }
                 },
                 .userdata1 = &g_state.adapter,
@@ -219,9 +340,9 @@ namespace Babylon::Plugins::NativeDawn
                 svContains(adapterInfo.description, "warp") ||
                 svContains(adapterInfo.description, "basic render");
 
-            std::fprintf(stderr, "[NativeDawn] adapter: device='%.*s' vendor='%.*s' vendorID=0x%x type=%d backend=%d software=%d\n",
-                static_cast<int>(adapterInfo.device.length), adapterInfo.device.data,
-                static_cast<int>(adapterInfo.vendor.length), adapterInfo.vendor.data,
+            DawnLogF(LogLevel::Log, "adapter: device='%s' vendor='%s' vendorID=0x%x type=%d backend=%d software=%d",
+                SvToStr(adapterInfo.device).c_str(),
+                SvToStr(adapterInfo.vendor).c_str(),
                 static_cast<unsigned>(adapterInfo.vendorID),
                 static_cast<int>(adapterInfo.adapterType), static_cast<int>(adapterInfo.backendType),
                 isSoftwareAdapter ? 1 : 0);
@@ -241,7 +362,7 @@ namespace Babylon::Plugins::NativeDawn
                 toggles.enabledToggleCount = 1;
                 toggles.enabledToggles = &kWarpWorkaround;
                 devDesc.nextInChain = &toggles.chain;
-                std::fprintf(stderr, "[NativeDawn] software adapter detected -- enabling MSAA-resolve lazy-clear workaround\n");
+                DawnLog(LogLevel::Warn, "software adapter detected -- enabling MSAA-resolve lazy-clear workaround");
             }
             WGPURequestDeviceCallbackInfo deviceCb{
                 .mode = WGPUCallbackMode_WaitAnyOnly,
@@ -253,8 +374,7 @@ namespace Babylon::Plugins::NativeDawn
                     }
                     else
                     {
-                        std::fprintf(stderr, "[NativeDawn] RequestDevice failed: %.*s\n",
-                            static_cast<int>(message.length), message.data);
+                        DawnLog(LogLevel::Error, "RequestDevice failed: " + SvToStr(message));
                     }
                 },
                 .userdata1 = &g_state.device,
@@ -283,7 +403,7 @@ namespace Babylon::Plugins::NativeDawn
 #endif
             if (!g_state.surface)
             {
-                std::fprintf(stderr, "[NativeDawn] CreateSurface failed\n");
+                DawnLog(LogLevel::Error, "CreateSurface failed");
                 return false;
             }
 
@@ -310,7 +430,7 @@ namespace Babylon::Plugins::NativeDawn
             wgpuSurfaceConfigure(g_state.surface, &cfg);
 
             g_state.ready = true;
-            std::fprintf(stderr, "[NativeDawn] Dawn device + surface ready (%ux%u, format=%d)\n",
+            DawnLogF(LogLevel::Log, "Dawn device + surface ready (%ux%u, format=%d)",
                 width, height, static_cast<int>(g_state.surfaceFormat));
             return true;
         }
@@ -329,7 +449,7 @@ namespace Babylon::Plugins::NativeDawn
             wgpuSurfaceGetCurrentTexture(g_state.surface, &st);
             if (!st.texture)
             {
-                std::fprintf(stderr, "[NativeDawn] GetCurrentTexture: null\n");
+                DawnLog(LogLevel::Error, "GetCurrentTexture: null");
                 return;
             }
 
@@ -382,13 +502,6 @@ namespace Babylon::Plugins::NativeDawn
     {
         // ---- small JS helpers ------------------------------------------------
         inline bool IsNullish(Napi::Value v) { return v.IsUndefined() || v.IsNull(); }
-
-        std::string SvToStr(const WGPUStringView& sv)
-        {
-            if (sv.data == nullptr) return {};
-            if (sv.length == static_cast<size_t>(-1)) return std::string(sv.data);
-            return std::string(sv.data, sv.length);
-        }
 
         template <typename Fn>
         void SetMethod(Napi::Object obj, const char* name, Fn&& fn)
@@ -1248,6 +1361,83 @@ namespace Babylon::Plugins::NativeDawn
         // ---- surface state ---------------------------------------------------
         bool g_surfaceConfigured = false;
         bool g_currentTextureAcquired = false;
+        // Babylon reuses its upload/render command encoders across
+        // requestAnimationFrame callbacks, so a render pass recorded against the
+        // surface texture in frame N can be submitted in frame N+1. Presenting
+        // destroys the surface texture, so we must not present until the work
+        // that targets it has actually been submitted.
+        bool g_surfaceWorkPending = false;
+
+        // Remembered from the last GPUCanvasContext.configure() so the surface can
+        // be re-configured on a resize without losing the requested usage/alpha.
+        WGPUTextureUsage g_surfaceUsage = WGPUTextureUsage(WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc);
+        WGPUCompositeAlphaMode g_surfaceAlphaMode = WGPUCompositeAlphaMode_Opaque;
+
+        // Size the canvas currently reports. The surface catches up with it at the
+        // next safe point (see ApplyPendingSurfaceResize).
+        uint32_t g_requestedWidth = 0;
+        uint32_t g_requestedHeight = 0;
+
+        // Reconfiguring a surface destroys every texture it has already handed
+        // out. Babylon acquires the frame's texture in _startMainRenderPass and
+        // only submits it in endFrame/flushFramebuffer, so reconfiguring in
+        // between kills the texture the in-flight command buffer references and
+        // Dawn rejects the submit with "Destroyed texture ... used in a submit",
+        // losing the whole frame. Babylon does resize from inside the render loop
+        // (setHardwareScalingLevel -> resize -> setSize), so a resize is recorded
+        // here and applied only while no texture is outstanding.
+        void ApplyPendingSurfaceResize()
+        {
+            if (g_requestedWidth == 0 || g_requestedHeight == 0) return;
+            if (g_requestedWidth == g_state.width && g_requestedHeight == g_state.height) return;
+            if (g_currentTextureAcquired) return;
+            if (!g_surfaceConfigured || g_state.surface == nullptr || g_state.device == nullptr) return;
+
+            g_state.width = g_requestedWidth;
+            g_state.height = g_requestedHeight;
+
+            if (g_state.currentSurfaceTexture != nullptr)
+            {
+                wgpuTextureRelease(g_state.currentSurfaceTexture);
+                g_state.currentSurfaceTexture = nullptr;
+            }
+
+            WGPUSurfaceConfiguration cfg{
+                .device = g_state.device,
+                .format = g_state.surfaceFormat,
+                .usage = g_surfaceUsage,
+                .width = g_state.width,
+                .height = g_state.height,
+                .alphaMode = g_surfaceAlphaMode,
+                .presentMode = WGPUPresentMode_Fifo,
+            };
+            wgpuSurfaceConfigure(g_state.surface, &cfg);
+        }
+
+        // Resize the drawing buffer (the Dawn surface) without touching the OS
+        // window. On the web, assigning canvas.width/height resizes the drawing
+        // buffer and the swap chain follows; Babylon relies on that for
+        // engine.setHardwareScalingLevel(), which calls setSize(clientWidth/level,
+        // ...) and then allocates its depth attachment at the new size. Without
+        // this the colour attachment stays at the old size and every render pass
+        // fails validation with "does not match the size of the other attachments'
+        // base plane", and the framebuffer readback comes back the wrong size.
+        void ResizeDrawingBuffer(uint32_t width, uint32_t height)
+        {
+            if (width < 1) width = 1;
+            if (height < 1) height = 1;
+            g_requestedWidth = width;
+            g_requestedHeight = height;
+
+            if (!g_surfaceConfigured || g_state.surface == nullptr || g_state.device == nullptr)
+            {
+                // Nothing configured yet: the values are picked up at configure().
+                g_state.width = width;
+                g_state.height = height;
+                return;
+            }
+            ApplyPendingSurfaceResize();
+        }
 
         // ---- forward declarations of object builders -------------------------
         Napi::Object MakeAdapter(Napi::Env env);
@@ -1256,7 +1446,7 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeBuffer(Napi::Env env, WGPUBuffer h, uint64_t size, uint32_t usage, bool mapped);
         Napi::Object MakeTexture(Napi::Env env, WGPUTexture h, uint32_t w, uint32_t ht, uint32_t depth,
             uint32_t mip, uint32_t sample, const std::string& fmt, uint32_t usage, const std::string& dim);
-        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht);
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht, WGPUTexture src);
         Napi::Object MakeSampler(Napi::Env env, WGPUSampler h);
         Napi::Object MakeBindGroupLayout(Napi::Env env, WGPUBindGroupLayout h);
         Napi::Object MakeBindGroup(Napi::Env env, WGPUBindGroup h);
@@ -1405,7 +1595,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUTextureView --------------------------------------------------
-        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht)
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht, WGPUTexture src)
         {
             Napi::Object o = NewGPUObject(env, "GPUTextureView");
             SetHandle(o, h);
@@ -1413,6 +1603,7 @@ namespace Babylon::Plugins::NativeDawn
             // the render pass can clamp scissor rects to the attachment.
             o.Set("__width", Napi::Number::New(env, w));
             o.Set("__height", Napi::Number::New(env, ht));
+            o.Set("__tex", Napi::Number::New(env, static_cast<double>(reinterpret_cast<uintptr_t>(src))));
             return o;
         }
 
@@ -1458,7 +1649,7 @@ namespace Babylon::Plugins::NativeDawn
                     if (PropPresent(desc, "usage")) d.usage = WGPUTextureUsage(PropU32(desc, "usage", 0));
                 }
                 return MakeTextureView(env, wgpuTextureCreateView(h, &d),
-                    std::max(1u, w >> d.baseMipLevel), std::max(1u, ht >> d.baseMipLevel));
+                    std::max(1u, w >> d.baseMipLevel), std::max(1u, ht >> d.baseMipLevel), h);
             });
             SetMethod(o, "destroy", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 wgpuTextureAddRef(h);
@@ -1880,6 +2071,10 @@ namespace Babylon::Plugins::NativeDawn
             };
             WGPUTexture* t = GetH<WGPUTexture>(o.Get("texture"));
             if (t != nullptr) info.texture = *t;
+            if (t != nullptr && *t == g_state.currentSurfaceTexture)
+            {
+                g_surfaceWorkPending = true;
+            }
             info.mipLevel = PropU32(o, "mipLevel", 0);
             if (PropPresent(o, "origin")) info.origin = ParseOrigin3D(o.Get("origin"));
             std::string aspect = PropStr(o, "aspect");
@@ -2231,8 +2426,15 @@ namespace Babylon::Plugins::NativeDawn
                 uint32_t rtWidth = 0;
                 uint32_t rtHeight = 0;
                 auto noteAttachmentSize = [&rtWidth, &rtHeight](Napi::Value viewV) {
-                    if (rtWidth != 0 || !viewV.IsObject()) return;
+                    if (!viewV.IsObject()) return;
                     Napi::Object v = viewV.As<Napi::Object>();
+                    const auto tex = reinterpret_cast<WGPUTexture>(
+                        static_cast<uintptr_t>(PropF64(v, "__tex", 0)));
+                    if (tex != nullptr && tex == g_state.currentSurfaceTexture)
+                    {
+                        g_surfaceWorkPending = true;
+                    }
+                    if (rtWidth != 0) return;
                     rtWidth = PropU32(v, "__width", 0);
                     rtHeight = PropU32(v, "__height", 0);
                 };
@@ -2411,7 +2613,11 @@ namespace Babylon::Plugins::NativeDawn
                         if (cb != nullptr) bufs.push_back(*cb);
                     }
                 }
-                if (!bufs.empty()) wgpuQueueSubmit(g_state.queue, bufs.size(), bufs.data());
+                if (!bufs.empty())
+                {
+                    wgpuQueueSubmit(g_state.queue, bufs.size(), bufs.data());
+                    g_surfaceWorkPending = false;
+                }
                 return info.Env().Undefined();
             });
             SetMethod(o, "writeBuffer", [](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -2473,9 +2679,8 @@ namespace Babylon::Plugins::NativeDawn
                     if (!warned)
                     {
                         warned = true;
-                        std::fprintf(stdout, "[NativeDawn] copyExternalImageToTexture: source has no decoded pixels; skipping (w=%u h=%u hasPixels=%d)\n",
+                        DawnLogF(LogLevel::Warn, "copyExternalImageToTexture: source has no decoded pixels; skipping (w=%u h=%u hasPixels=%d)",
                             w, h, px.data != nullptr ? 1 : 0);
-                        std::fflush(stdout);
                     }
                     return env.Undefined();
                 }
@@ -3056,14 +3261,16 @@ namespace Babylon::Plugins::NativeDawn
                 g_state.surfaceFormat = f;
                 uint32_t usage = PropU32(desc, "usage", static_cast<uint32_t>(WGPUTextureUsage_RenderAttachment));
                 std::string am = PropStr(desc, "alphaMode");
+                g_surfaceUsage = WGPUTextureUsage(usage | static_cast<uint32_t>(WGPUTextureUsage_CopySrc));
+                g_surfaceAlphaMode = (am == "premultiplied")
+                    ? WGPUCompositeAlphaMode_Premultiplied : WGPUCompositeAlphaMode_Opaque;
                 WGPUSurfaceConfiguration cfg{
                     .device = g_state.device,
                     .format = f,
-                    .usage = WGPUTextureUsage(usage | static_cast<uint32_t>(WGPUTextureUsage_CopySrc)),
+                    .usage = g_surfaceUsage,
                     .width = g_state.width > 1 ? g_state.width : 1,
                     .height = g_state.height > 1 ? g_state.height : 1,
-                    .alphaMode = (am == "premultiplied")
-                        ? WGPUCompositeAlphaMode_Premultiplied : WGPUCompositeAlphaMode_Opaque,
+                    .alphaMode = g_surfaceAlphaMode,
                     .presentMode = WGPUPresentMode_Fifo,
                 };
                 wgpuSurfaceConfigure(g_state.surface, &cfg);
@@ -3080,6 +3287,9 @@ namespace Babylon::Plugins::NativeDawn
             });
             SetMethod(o, "getCurrentTexture", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
+                // Safe point: no texture is outstanding yet this frame, so a
+                // resize requested mid-render-loop can be applied now.
+                ApplyPendingSurfaceResize();
                 WGPUSurfaceTexture st{
                     .nextInChain = nullptr,
                 };
@@ -3143,11 +3353,11 @@ namespace Babylon::Plugins::NativeDawn
                 return MakeCanvasContext(info.Env());
             });
             SetMethod(global, "_nativeDawnPresent", [](const Napi::CallbackInfo& info) -> Napi::Value {
-                if (g_surfaceConfigured && g_currentTextureAcquired)
+                if (g_surfaceConfigured && g_currentTextureAcquired && !g_surfaceWorkPending)
                 {
                     wgpuSurfacePresent(g_state.surface);
+                    g_currentTextureAcquired = false;
                 }
-                g_currentTextureAcquired = false;
                 if (g_state.instance)
                 {
                     wgpuInstanceProcessEvents(g_state.instance);
@@ -3277,8 +3487,6 @@ namespace Babylon::Plugins::NativeDawn
                 uint32_t h = info.Length() > 1 && info[1].IsNumber() ? info[1].As<Napi::Number>().Uint32Value() : g_state.height;
                 if (w < 1) w = 1;
                 if (h < 1) h = 1;
-                g_state.width = w;
-                g_state.height = h;
 #if defined(_WIN32)
                 if (g_state.hwnd != nullptr)
                 {
@@ -3291,19 +3499,7 @@ namespace Babylon::Plugins::NativeDawn
                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
                 }
 #endif
-                if (g_surfaceConfigured)
-                {
-                    WGPUSurfaceConfiguration cfg{
-                        .device = g_state.device,
-                        .format = g_state.surfaceFormat,
-                        .usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
-                        .width = w,
-                        .height = h,
-                        .alphaMode = WGPUCompositeAlphaMode_Auto,
-                        .presentMode = WGPUPresentMode_Fifo,
-                    };
-                    wgpuSurfaceConfigure(g_state.surface, &cfg);
-                }
+                ResizeDrawingBuffer(w, h);
                 return env.Undefined();
             });
 
@@ -3389,7 +3585,7 @@ namespace Babylon::Plugins::NativeDawn
                 return out;
             });
 
-            std::fprintf(stderr, "[NativeDawn] WebGPU (navigator.gpu) installed\n");
+            DawnLog(LogLevel::Log, "WebGPU (navigator.gpu) installed");
         }
     } // namespace (webgpu)
 
@@ -3984,6 +4180,36 @@ namespace Babylon::Plugins::NativeDawn
             }
             g_bootstrapCanvas = Napi::Persistent(canvas);
 
+            // On the web, assigning canvas.width/height resizes the drawing buffer.
+            // Babylon's setSize() (and therefore setHardwareScalingLevel) does
+            // exactly that, so bind those properties to the Dawn surface instead of
+            // leaving them as inert data. Only the canvas that actually backs the
+            // surface gets this treatment; offscreen 2D canvases keep plain values.
+            canvas.DefineProperties({
+                Napi::PropertyDescriptor::Accessor(env, canvas, "width",
+                    [](const Napi::CallbackInfo& info) -> Napi::Value {
+                        return Napi::Number::New(info.Env(), g_requestedWidth != 0 ? g_requestedWidth : g_state.width);
+                    },
+                    [](const Napi::CallbackInfo& info) {
+                        if (info.Length() > 0 && info[0].IsNumber())
+                        {
+                            ResizeDrawingBuffer(info[0].As<Napi::Number>().Uint32Value(),
+                                g_requestedHeight != 0 ? g_requestedHeight : g_state.height);
+                        }
+                    }),
+                Napi::PropertyDescriptor::Accessor(env, canvas, "height",
+                    [](const Napi::CallbackInfo& info) -> Napi::Value {
+                        return Napi::Number::New(info.Env(), g_requestedHeight != 0 ? g_requestedHeight : g_state.height);
+                    },
+                    [](const Napi::CallbackInfo& info) {
+                        if (info.Length() > 0 && info[0].IsNumber())
+                        {
+                            ResizeDrawingBuffer(g_requestedWidth != 0 ? g_requestedWidth : g_state.width,
+                                info[0].As<Napi::Number>().Uint32Value());
+                        }
+                    }),
+            });
+
             Napi::Object opts = Napi::Object::New(env);
             opts.Set("antialias", Napi::Boolean::New(env, false));
             opts.Set("stencil", Napi::Boolean::New(env, true));
@@ -4010,12 +4236,12 @@ namespace Babylon::Plugins::NativeDawn
                             return info.Env().Global().Get("__dawnEngine");
                         }));
                 }
-                std::fprintf(stderr, "[NativeDawn] WebGPUEngine ready\n");
+                DawnLog(LogLevel::Log, "WebGPUEngine ready");
                 return env.Undefined();
             });
             Napi::Function onErr = Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 std::string msg = info.Length() > 0 ? info[0].ToString().Utf8Value() : "?";
-                std::fprintf(stderr, "[NativeDawn] engine init failed: %s\n", msg.c_str());
+                DawnLog(LogLevel::Error, "engine init failed: " + msg);
                 return info.Env().Undefined();
             });
             initPromise.As<Napi::Object>().Get("then").As<Napi::Function>().Call(initPromise, {onReady, onErr});
@@ -4483,6 +4709,26 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(global, "cancelAnimationFrame", Noop);
             SetMethod(global, "frame", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
+                // Present the PREVIOUS frame before running this frame's work.
+                // Babylon reuses its upload/render command encoders across
+                // requestAnimationFrame callbacks, so a render pass recorded
+                // against the surface texture in one frame is often only
+                // submitted during the next one. Presenting destroys the surface
+                // texture, so presenting at the end of the frame that recorded
+                // the work loses it ("Destroyed texture [Texture of [Surface]]
+                // used in a submit") and blanks the frame. Present at the top of
+                // the next frame, and only once the recorded work has actually
+                // been submitted (g_surfaceWorkPending).
+                if (g_surfaceConfigured && g_currentTextureAcquired && !g_surfaceWorkPending)
+                {
+                    wgpuSurfacePresent(g_state.surface);
+                    g_currentTextureAcquired = false;
+                    ApplyPendingSurfaceResize();
+                }
+                if (g_state.instance)
+                {
+                    wgpuInstanceProcessEvents(g_state.instance);
+                }
                 double now = 0.0;
                 Napi::Value perf = env.Global().Get("performance");
                 if (perf.IsObject())
@@ -4522,12 +4768,8 @@ namespace Babylon::Plugins::NativeDawn
                     // next scene loads and starts allocating again.
                     PumpJsFinalizers(env, true);
                 }
-                // Present the frame.
-                if (g_surfaceConfigured && g_currentTextureAcquired)
-                {
-                    wgpuSurfacePresent(g_state.surface);
-                }
-                g_currentTextureAcquired = false;
+                // The present for this frame is deferred to the top of the next
+                // frame (see the comment there), so nothing is presented here.
                 if (g_state.instance)
                 {
                     wgpuInstanceProcessEvents(g_state.instance);
@@ -4774,9 +5016,15 @@ namespace Babylon::Plugins::NativeDawn
 
     void Initialize(Napi::Env env, void* window, uint32_t width, uint32_t height)
     {
+        // Bind diagnostics to this environment first, so adapter/device creation
+        // messages (including any Dawn validation errors raised during startup)
+        // already reach the JS console rather than the stderr fallback.
+        g_logEnv = env;
+        g_jsThreadId = std::this_thread::get_id();
+
         if (!CreateDeviceAndSurface(window, width, height))
         {
-            std::fprintf(stderr, "[NativeDawn] initialization failed\n");
+            DawnLog(LogLevel::Error, "initialization failed");
             return;
         }
 
@@ -4849,6 +5097,13 @@ namespace Babylon::Plugins::NativeDawn
 #if defined(NATIVEDAWN_V8_FINALIZER_DRAIN)
         g_wrappersAtLastPump = 0;
 #endif
+
+        // The environment is about to go away; anything logged after this point
+        // has to use the stderr fallback.
+        g_logEnv = nullptr;
+        g_jsThreadId = {};
+        g_requestedWidth = 0;
+        g_requestedHeight = 0;
     }
 
     void Tick(Napi::Env)
@@ -4867,28 +5122,9 @@ namespace Babylon::Plugins::NativeDawn
         {
             return;
         }
-        if (g_state.width == width && g_state.height == height)
-        {
-            return;
-        }
-        g_state.width = width;
-        g_state.height = height;
-        // Drop the cached current texture (it belongs to the old swapchain).
-        if (g_state.currentSurfaceTexture) wgpuTextureRelease(g_state.currentSurfaceTexture);
-        g_state.currentSurfaceTexture = nullptr;
-        g_currentTextureAcquired = false;
-        if (g_surfaceConfigured)
-        {
-            WGPUSurfaceConfiguration cfg{
-                .device = g_state.device,
-                .format = g_state.surfaceFormat,
-                .usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
-                .width = width,
-                .height = height,
-                .alphaMode = WGPUCompositeAlphaMode_Auto,
-                .presentMode = WGPUPresentMode_Fifo,
-            };
-            wgpuSurfaceConfigure(g_state.surface, &cfg);
-        }
+        // Goes through the same deferral as canvas.width/height so a resize
+        // arriving mid-frame cannot destroy the texture the in-flight command
+        // buffer is still referencing.
+        ResizeDrawingBuffer(width, height);
     }
 }
