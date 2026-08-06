@@ -309,7 +309,7 @@
             "title": "Scissor test",
             "playgroundId": "#W7E7CF#34",
             "referenceImage": "scissor-test.png",
-            "reason": "mostly black on WebGPU/Dawn (95.693% pixel diff)"
+            "reason": "surface texture destroyed mid-frame then used in a submit ('Destroyed texture [Texture \"of [Surface]\"] used in a submit'), blanking the frame (95.693% pixel diff); unrelated to scissor clamping"
         },
         {
             "title": "Scissor test with 0.9 hardware scaling",
@@ -328,18 +328,14 @@
             "reason": "WebGPU/Dawn readback stays 600x400 while hardware scaling produces a 425600-byte reference (render data is 960000 bytes)"
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with negative x and y",
             "playgroundId": "#3L5BCD#2",
-            "referenceImage": "scissorTestNegativeXandY.png",
-            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
+            "referenceImage": "scissorTestNegativeXandY.png"
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Scissor test with out of bounds width and height",
             "playgroundId": "#3L5BCD#3",
-            "referenceImage": "scissorTestOobWidthAndHeight.png",
-            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
+            "referenceImage": "scissorTestOobWidthAndHeight.png"
         },
         {
             "title": "setParent",

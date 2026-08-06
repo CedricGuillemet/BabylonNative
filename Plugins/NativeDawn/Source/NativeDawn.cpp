@@ -1256,7 +1256,7 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeBuffer(Napi::Env env, WGPUBuffer h, uint64_t size, uint32_t usage, bool mapped);
         Napi::Object MakeTexture(Napi::Env env, WGPUTexture h, uint32_t w, uint32_t ht, uint32_t depth,
             uint32_t mip, uint32_t sample, const std::string& fmt, uint32_t usage, const std::string& dim);
-        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h);
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht);
         Napi::Object MakeSampler(Napi::Env env, WGPUSampler h);
         Napi::Object MakeBindGroupLayout(Napi::Env env, WGPUBindGroupLayout h);
         Napi::Object MakeBindGroup(Napi::Env env, WGPUBindGroup h);
@@ -1265,7 +1265,7 @@ namespace Babylon::Plugins::NativeDawn
         Napi::Object MakeRenderPipeline(Napi::Env env, WGPURenderPipeline h);
         Napi::Object MakeComputePipeline(Napi::Env env, WGPUComputePipeline h);
         Napi::Object MakeCommandEncoder(Napi::Env env, WGPUCommandEncoder h);
-        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h);
+        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h, uint32_t rtWidth, uint32_t rtHeight);
         Napi::Object MakeComputePassEncoder(Napi::Env env, WGPUComputePassEncoder h);
         Napi::Object MakeRenderBundleEncoder(Napi::Env env, WGPURenderBundleEncoder h);
         Napi::Object MakeRenderBundle(Napi::Env env, WGPURenderBundle h);
@@ -1405,10 +1405,14 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPUTextureView --------------------------------------------------
-        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h)
+        Napi::Object MakeTextureView(Napi::Env env, WGPUTextureView h, uint32_t w, uint32_t ht)
         {
             Napi::Object o = NewGPUObject(env, "GPUTextureView");
             SetHandle(o, h);
+            // Size of the mip level this view targets. Needed by beginRenderPass so
+            // the render pass can clamp scissor rects to the attachment.
+            o.Set("__width", Napi::Number::New(env, w));
+            o.Set("__height", Napi::Number::New(env, ht));
             return o;
         }
 
@@ -1427,7 +1431,7 @@ namespace Babylon::Plugins::NativeDawn
             o.Set("dimension", Napi::String::New(env, dim.empty() ? "2d" : dim));
             o.Set("usage", Napi::Number::New(env, usage));
 
-            SetMethod(o, "createView", [h](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(o, "createView", [h, w, ht](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 WGPUTextureViewDescriptor d{
                     .label = EmptyStringView(),
@@ -1453,7 +1457,8 @@ namespace Babylon::Plugins::NativeDawn
                     else d.aspect = WGPUTextureAspect_All;
                     if (PropPresent(desc, "usage")) d.usage = WGPUTextureUsage(PropU32(desc, "usage", 0));
                 }
-                return MakeTextureView(env, wgpuTextureCreateView(h, &d));
+                return MakeTextureView(env, wgpuTextureCreateView(h, &d),
+                    std::max(1u, w >> d.baseMipLevel), std::max(1u, ht >> d.baseMipLevel));
             });
             SetMethod(o, "destroy", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 wgpuTextureAddRef(h);
@@ -1909,7 +1914,7 @@ namespace Babylon::Plugins::NativeDawn
         }
 
         // ---- GPURenderPassEncoder --------------------------------------------
-        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h)
+        Napi::Object MakeRenderPassEncoder(Napi::Env env, WGPURenderPassEncoder h, uint32_t rtWidth, uint32_t rtHeight)
         {
             Napi::Object o = NewGPUObject(env, "GPURenderPassEncoder");
             SetHandle(o, h);
@@ -1974,8 +1979,39 @@ namespace Babylon::Plugins::NativeDawn
                     static_cast<float>(ArgF64(info, 4, 0)), static_cast<float>(ArgF64(info, 5, 1)));
                 return info.Env().Undefined();
             });
-            SetMethod(o, "setScissorRect", [h](const Napi::CallbackInfo& info) -> Napi::Value {
-                wgpuRenderPassEncoderSetScissorRect(h, ArgU32(info, 0, 0), ArgU32(info, 1, 0), ArgU32(info, 2, 0), ArgU32(info, 3, 0));
+            SetMethod(o, "setScissorRect", [h, rtWidth, rtHeight](const Napi::CallbackInfo& info) -> Napi::Value {
+                // WebGPU rejects a scissor rect that is not fully contained in the
+                // render target, and the rejection invalidates the whole command
+                // buffer, so a single out-of-range rect blanks the entire frame.
+                // D3D11/Metal clamp instead, and Babylon relies on that, so
+                // intersect the rect with the attachment here. Read the arguments
+                // as doubles: Babylon can pass negative offsets, which would wrap
+                // to huge values if taken as uint32.
+                const double xd = ArgF64(info, 0, 0);
+                const double yd = ArgF64(info, 1, 0);
+                int64_t x0 = static_cast<int64_t>(xd);
+                int64_t y0 = static_cast<int64_t>(yd);
+                int64_t x1 = x0 + static_cast<int64_t>(ArgF64(info, 2, 0));
+                int64_t y1 = y0 + static_cast<int64_t>(ArgF64(info, 3, 0));
+
+                if (rtWidth != 0 && rtHeight != 0)
+                {
+                    x0 = std::clamp<int64_t>(x0, 0, rtWidth);
+                    y0 = std::clamp<int64_t>(y0, 0, rtHeight);
+                    x1 = std::clamp<int64_t>(x1, x0, rtWidth);
+                    y1 = std::clamp<int64_t>(y1, y0, rtHeight);
+                }
+                else
+                {
+                    // Attachment size unknown; at least keep the values in range.
+                    x0 = std::max<int64_t>(x0, 0);
+                    y0 = std::max<int64_t>(y0, 0);
+                    x1 = std::max<int64_t>(x1, x0);
+                    y1 = std::max<int64_t>(y1, y0);
+                }
+
+                wgpuRenderPassEncoderSetScissorRect(h, static_cast<uint32_t>(x0), static_cast<uint32_t>(y0),
+                    static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0));
                 return info.Env().Undefined();
             });
             SetMethod(o, "setBlendConstant", [h](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -2190,6 +2226,17 @@ namespace Babylon::Plugins::NativeDawn
                 std::string label = PropStr(desc, "label");
                 if (!label.empty()) rpd.label = StrView(label);
 
+                // WebGPU validates scissor rects against the attachment size, so
+                // remember it and hand it to the render pass encoder.
+                uint32_t rtWidth = 0;
+                uint32_t rtHeight = 0;
+                auto noteAttachmentSize = [&rtWidth, &rtHeight](Napi::Value viewV) {
+                    if (rtWidth != 0 || !viewV.IsObject()) return;
+                    Napi::Object v = viewV.As<Napi::Object>();
+                    rtWidth = PropU32(v, "__width", 0);
+                    rtHeight = PropU32(v, "__height", 0);
+                };
+
                 std::vector<WGPURenderPassColorAttachment> colors;
                 Napi::Value caV = desc.Get("colorAttachments");
                 if (caV.IsArray())
@@ -2211,8 +2258,10 @@ namespace Babylon::Plugins::NativeDawn
                         Napi::Value ev = arr.Get(i);
                         if (!ev.IsObject()) { colors.push_back(c); continue; }
                         Napi::Object ca = ev.As<Napi::Object>();
-                        WGPUTextureView* view = GetH<WGPUTextureView>(ca.Get("view"));
+                        Napi::Value viewV = ca.Get("view");
+                        WGPUTextureView* view = GetH<WGPUTextureView>(viewV);
                         if (view != nullptr) c.view = *view;
+                        noteAttachmentSize(viewV);
                         if (PropPresent(ca, "depthSlice")) c.depthSlice = PropU32(ca, "depthSlice", 0);
                         WGPUTextureView* resolve = GetH<WGPUTextureView>(ca.Get("resolveTarget"));
                         if (resolve != nullptr) c.resolveTarget = *resolve;
@@ -2239,8 +2288,10 @@ namespace Babylon::Plugins::NativeDawn
                 if (dsV.IsObject())
                 {
                     Napi::Object ds = dsV.As<Napi::Object>();
-                    WGPUTextureView* view = GetH<WGPUTextureView>(ds.Get("view"));
+                    Napi::Value dsViewV = ds.Get("view");
+                    WGPUTextureView* view = GetH<WGPUTextureView>(dsViewV);
                     if (view != nullptr) dsa.view = *view;
+                    noteAttachmentSize(dsViewV);
                     if (PropPresent(ds, "depthLoadOp")) dsa.depthLoadOp = loadOp(PropStr(ds, "depthLoadOp"));
                     if (PropPresent(ds, "depthStoreOp")) dsa.depthStoreOp = storeOp(PropStr(ds, "depthStoreOp"));
                     dsa.depthClearValue = static_cast<float>(PropF64(ds, "depthClearValue", 0));
@@ -2252,7 +2303,7 @@ namespace Babylon::Plugins::NativeDawn
                     rpd.depthStencilAttachment = &dsa;
                 }
 
-                return MakeRenderPassEncoder(env, wgpuCommandEncoderBeginRenderPass(h, &rpd));
+                return MakeRenderPassEncoder(env, wgpuCommandEncoderBeginRenderPass(h, &rpd), rtWidth, rtHeight);
             });
             SetMethod(o, "beginComputePass", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
