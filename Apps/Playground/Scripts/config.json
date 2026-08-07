@@ -4986,26 +4986,20 @@
             "title": "Fog",
             "scriptToRun": "/Demos/Fog/fog.js",
             "functionToCall": "CreateFogScene",
-            "referenceImage": "fog.png",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "referenceImage": "fog.png"
         },
         {
             "title": "Polygon",
             "scriptToRun": "/Demos/Polygon/polygon.js",
             "functionToCall": "CreatePolygonScene",
-            "referenceImage": "polygon.png",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "referenceImage": "polygon.png"
         },
         {
             "title": "Lines",
             "scriptToRun": "/Demos/Lines/lines.js",
             "functionToCall": "CreateLinesTestScene",
             "referenceImage": "lines.png",
-            "replace": "updateVerticesDataDirectly, updateVerticesData",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "replace": "updateVerticesDataDirectly, updateVerticesData"
         },
         {
             "title": "Lens",
@@ -5013,17 +5007,13 @@
             "functionToCall": "CreateLensFlaresTestScene",
             "replaceUrl": "lens4.png, lens5.png",
             "rootPath": "/Demos/Lens/",
-            "referenceImage": "lens.png",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "referenceImage": "lens.png"
         },
         {
             "title": "Self shadowing",
             "scriptToRun": "/Demos/SelfShadowing/shadows.js",
             "functionToCall": "CreateShadowsTestScene",
-            "referenceImage": "selfShadowing.png",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "referenceImage": "selfShadowing.png"
         },
         {
             "title": "Reflection probes",
@@ -5047,7 +5037,7 @@
             "referenceImage": "procedural.png",
             "replace": "./land, https://cdn.rawgit.com/BabylonJS/Website/06ecbea7/Demos/Procedural/land",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "reason": "renders, but pixel comparison fails (~24% of pixels differ)"
         },
         {
             "title": "SSAO2",
@@ -5091,7 +5081,7 @@
             "playgroundId": "#4N0QRP#1",
             "referenceImage": "allProcTextures.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "BABYLON.NormalMapProceduralTexture is not included in the native script bundle"
+            "reason": "renders, but pixel comparison fails (~7% of pixels differ)"
         },
         {
             "title": "Loading glTF model with KTX2 textures",
