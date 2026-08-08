@@ -5,6 +5,7 @@
 #include <bx/error.h>
 #include <bx/platform.h>
 #include <bx/readerwriter.h>
+#include <bx/string.h>
 
 #include <atomic>
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 
 #if defined(_MSC_VER)
@@ -21,9 +23,11 @@
 #   endif // WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <crtdbg.h>
+#include <dbghelp.h>
 #include <stdlib.h>
 #include <io.h>
 #include <wchar.h>
+#pragma comment(lib, "dbghelp.lib")
 #else
 #include <unistd.h>
 #endif
@@ -41,6 +45,85 @@ namespace
     bool s_ansiEnabled{false};
 
 #if defined(_MSC_VER)
+    // bx::writeCallstack() prints "<Unknown?>" for every frame in a stock
+    // Release build, which makes crash reports impossible to triage. Resolve
+    // the frames with dbghelp (shipped with Windows) and always append
+    // "module+RVA" so the trace stays actionable even when no PDB is found.
+    int32_t WriteSymbolizedCallstack(bx::WriterI* writer, const uintptr_t* stack, uint32_t numFrames, bx::Error* err)
+    {
+        const HANDLE process = ::GetCurrentProcess();
+
+        static bool s_symInitialized = false;
+        static bool s_symTried = false;
+        if (!s_symTried)
+        {
+            s_symTried = true;
+            ::SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+            s_symInitialized = ::SymInitialize(process, nullptr, TRUE) != FALSE;
+        }
+
+        int32_t total = bx::write(writer, err, "Callstack (%u):\n", numFrames);
+
+        for (uint32_t ii = 0; ii < numFrames; ++ii)
+        {
+            const uintptr_t address = stack[ii];
+
+            char moduleName[MAX_PATH];
+            bx::snprintf(moduleName, sizeof(moduleName), "%s", "<unknown-module>");
+            uintptr_t rva = address;
+
+            HMODULE module = nullptr;
+            if (::GetModuleHandleExA(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    reinterpret_cast<LPCSTR>(address),
+                    &module)
+                && module != nullptr)
+            {
+                char fullPath[MAX_PATH];
+                if (::GetModuleFileNameA(module, fullPath, MAX_PATH) != 0)
+                {
+                    const char* leaf = std::strrchr(fullPath, '\\');
+                    bx::snprintf(moduleName, sizeof(moduleName), "%s", leaf != nullptr ? leaf + 1 : fullPath);
+                }
+                rva = address - reinterpret_cast<uintptr_t>(module);
+            }
+
+            total += bx::write(writer, err, "\t%2u: 0x%016llx  %s+0x%llx",
+                ii,
+                static_cast<unsigned long long>(address),
+                moduleName,
+                static_cast<unsigned long long>(rva));
+
+            if (s_symInitialized)
+            {
+                alignas(SYMBOL_INFO) char symbolStorage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME]{};
+                auto* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolStorage);
+                symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+                symbol->MaxNameLen = MAX_SYM_NAME;
+
+                DWORD64 symbolOffset = 0;
+                if (::SymFromAddr(process, address, &symbolOffset, symbol) != FALSE)
+                {
+                    total += bx::write(writer, err, "  %s+0x%llx",
+                        symbol->Name, static_cast<unsigned long long>(symbolOffset));
+                }
+
+                IMAGEHLP_LINE64 lineInfo{};
+                lineInfo.SizeOfStruct = sizeof(lineInfo);
+                DWORD lineOffset = 0;
+                if (::SymGetLineFromAddr64(process, address, &lineOffset, &lineInfo) != FALSE)
+                {
+                    total += bx::write(writer, err, "  (%s:%u)",
+                        lineInfo.FileName, static_cast<unsigned>(lineInfo.LineNumber));
+                }
+            }
+
+            total += bx::write(writer, err, "\n");
+        }
+
+        return total;
+    }
+
     void __cdecl OnInvalidParameter(
         const wchar_t* expression,
         const wchar_t* function,
@@ -162,6 +245,37 @@ namespace
         Diagnostics::PrintFinishLine();
         std::_Exit(3);
     }
+    void OnTerminate()
+    {
+        // An uncaught C++ exception otherwise reaches abort() with nothing but
+        // "SIGABRT raised." and an unsymbolized callstack, which says nothing
+        // about what actually went wrong. Re-throw here (we are inside the
+        // terminate handler, so the exception is still current) purely to
+        // recover its message.
+        const char* kind = "TERMINATE";
+        std::string detail{"terminate called without an active exception."};
+
+        if (std::current_exception() != nullptr)
+        {
+            try
+            {
+                std::rethrow_exception(std::current_exception());
+            }
+            catch (const std::exception& e)
+            {
+                detail = std::string{"uncaught std::exception: "} + e.what();
+            }
+            catch (...)
+            {
+                detail = "uncaught non-std exception.";
+            }
+        }
+
+        Diagnostics::DumpFailure(kind, nullptr, 0, 1, "%s", detail.c_str());
+        Diagnostics::SetExitCode(3);
+        Diagnostics::PrintFinishLine();
+        std::_Exit(3);
+    }
 }
 
 namespace Diagnostics
@@ -179,6 +293,9 @@ namespace Diagnostics
         // Route bx asserts + the SEH top-level exception filter to DumpFailure
         // (stderr-visible) instead of bx's OutputDebugString-only default.
         bx::setAssertHandler(&OnBxAssert);
+
+        // Report the message of an uncaught exception before abort() swallows it.
+        std::set_terminate(&OnTerminate);
 
 #if defined(_MSC_VER)
         // Route assert() to stderr instead of UCRT's modal dialog. Covers the
@@ -333,7 +450,17 @@ namespace Diagnostics
         // +2 to skip this function and the public DumpFailure trampoline.
         uintptr_t stack[64];
         const uint32_t numFrames = bx::getCallStackExact(2 + skipFrames, BX_COUNTOF(stack), stack);
+#if defined(_MSC_VER)
+        // bx::writeCallstack() only resolves symbols when a debugger-quality
+        // symbol handler is available, so in a plain Release run every frame
+        // comes back as "<Unknown?>" with a raw address -- useless for triage.
+        // Resolve here with dbghelp (always present on Windows) and always
+        // fall back to "module+RVA", which stays meaningful even with no PDB
+        // because it can be symbolized after the fact.
+        total += WriteSymbolizedCallstack(&smb, stack, numFrames, &err);
+#else
         total += bx::writeCallstack(&smb, stack, numFrames, &err);
+#endif
 
         total += bx::write(&smb, &err,
             "\nBuild info:\n"

@@ -4,14 +4,14 @@
 #include <cstdint>
 #include <vector>
 
-namespace Babylon::Polyfills::Internal
+namespace Babylon::Plugins::Internal
 {
-    class ImageData final : public Napi::ObjectWrap<ImageData>
+    class ImageDataDawn final : public Napi::ObjectWrap<ImageDataDawn>
     {
     public:
-        static Napi::Value CreateInstance(Napi::Env env, Context* context, int32_t sx, int32_t sy, uint32_t width, uint32_t height);
+        static Napi::Value CreateInstance(Napi::Env env, ContextDawn* context, int32_t sx, int32_t sy, uint32_t width, uint32_t height);
 
-        explicit ImageData(const Napi::CallbackInfo& info);
+        explicit ImageDataDawn(const Napi::CallbackInfo& info);
 
     private:
         Napi::Value GetWidth(const Napi::CallbackInfo&);

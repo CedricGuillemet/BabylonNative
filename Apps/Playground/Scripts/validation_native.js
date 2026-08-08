@@ -789,30 +789,35 @@
         xhr.send();
     }
 
+    // The canvas font is registered globally (NativeCanvas::loadTTF populates a
+    // static font table that every 2D context reads), so both rendering paths
+    // need it before any GUI/DynamicTexture text can rasterize.
+    const loadFontThen = function (next) {
+        BABYLON.Tools.LoadFile("https://raw.githubusercontent.com/CedricGuillemet/dump/master/droidsans.ttf", (data) => {
+            _native.Canvas.loadTTFAsync("droidsans", data).then(next, next);
+        }, undefined, undefined, true);
+    };
+
     if (isDawn) {
         // The WebGPU engine completes initAsync asynchronously, pumped by the
         // host frame loop (RenderFrame -> frame() -> requestAnimationFrame).
         // Wait until the NativeDawn plugin promotes it to __dawnEngine before
         // starting: runRenderLoop needs a fully initialized engine and getCaps()
-        // is only populated post-init. The bgfx-only `_native` font/RootUrl
-        // setup is skipped -- playground assets load via absolute https URLs
-        // (see loadPG), and GUI text tests that need the bundled font are gated
-        // by excludedGraphicsApis:["WebGPU"] in config.json.
+        // is only populated post-init. Playground assets load via absolute https
+        // URLs (see loadPG), so _native.RootUrl is left alone here.
         const waitForEngine = function () {
             if (globalThis.__dawnEngine) {
                 globalThis.__dawnEngine.getCaps().parallelShaderCompile = undefined;
-                startValidation();
+                loadFontThen(startValidation);
             } else {
                 setTimeout(waitForEngine, 16);
             }
         };
         waitForEngine();
     } else {
-        BABYLON.Tools.LoadFile("https://raw.githubusercontent.com/CedricGuillemet/dump/master/droidsans.ttf", (data) => {
-            _native.Canvas.loadTTFAsync("droidsans", data).then(function () {
-                _native.RootUrl = "https://playground.babylonjs.com";
-                startValidation();
-            });
-        }, undefined, undefined, true);
+        loadFontThen(function () {
+            _native.RootUrl = "https://playground.babylonjs.com";
+            startValidation();
+        });
     }
 })();

@@ -15,21 +15,22 @@
 #endif
 
 #include "nanovg/nanovg.h"
-#include "nanovg/nanovg_babylon.h"
+#include "nanovg/nanovg_dawn.h"
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
 
-#define STB_TRUETYPE_IMPLEMENTATION
+// stb_truetype's implementation is already compiled into the Canvas library
+// (Polyfills/Canvas/Source/Context.cpp defines STB_TRUETYPE_IMPLEMENTATION).
+// Take only the declarations here so the two do not collide at link time.
 #include "stb/stb_truetype.h"
-#undef STB_TRUETYPE_IMPLEMENTATION
 
-#include "Canvas.h"
-#include "Context.h"
-#include "MeasureText.h"
+#include "CanvasDawn.h"
+#include "ContextDawn.h"
+#include "MeasureTextDawn.h"
 #include "Image.h"
-#include "ImageData.h"
+#include "ImageDataDawn.h"
 #include "Path2D.h"
 #include "Colors.h"
 #include "LineCaps.h"
@@ -37,13 +38,31 @@
 
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 #include <bimg/bimg.h>
+#include <bx/allocator.h>
 #endif
 
-namespace Babylon::Polyfills::Internal
+namespace Babylon::Plugins::Internal
 {
-    static constexpr auto JS_CONTEXT_CONSTRUCTOR_NAME = "Context";
+    // The Dawn context reuses every backend-agnostic helper from the Canvas
+    // polyfill (colour/line-cap parsing, gradients, paths, images, fonts) and
+    // only replaces the submission layer, which is bgfx-specific there. The
+    // classes it *does* replace are all suffixed "Dawn", so nothing collides.
+    using namespace Babylon::Polyfills::Internal;
 
-    void Context::Initialize(Napi::Env env)
+#ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+    // The bgfx Context uses Graphics::DeviceContext::GetDefaultAllocator() here,
+    // but there is no bgfx device on the Dawn path. bimg only needs somewhere to
+    // allocate scratch from, so a plain default allocator is equivalent.
+    static bx::AllocatorI& ImageDecodeAllocator()
+    {
+        static bx::DefaultAllocator s_allocator;
+        return s_allocator;
+    }
+#endif
+
+    static constexpr auto JS_CONTEXT_CONSTRUCTOR_NAME = "ContextDawn";
+
+    void ContextDawn::Initialize(Napi::Env env)
     {
         Napi::HandleScope scope{env};
 
@@ -51,99 +70,93 @@ namespace Babylon::Polyfills::Internal
             env,
             JS_CONTEXT_CONSTRUCTOR_NAME,
             {
-                InstanceMethod("clearRect", &Context::ClearRect),
-                InstanceMethod("save", &Context::Save),
-                InstanceMethod("restore", &Context::Restore),
-                InstanceMethod("fillRect", &Context::FillRect),
-                InstanceMethod("scale", &Context::Scale),
-                InstanceMethod("rotate", &Context::Rotate),
-                InstanceMethod("translate", &Context::Translate),
-                InstanceMethod("strokeRect", &Context::StrokeRect),
-                InstanceMethod("rect", &Context::Rect),
-                InstanceMethod("roundRect", &Context::RoundRect),
-                InstanceMethod("clip", &Context::Clip),
-                InstanceMethod("putImageData", &Context::PutImageData),
-                InstanceMethod("arc", &Context::Arc),
-                InstanceMethod("beginPath", &Context::BeginPath),
-                InstanceMethod("closePath", &Context::ClosePath),
-                InstanceMethod("moveTo", &Context::MoveTo),
-                InstanceMethod("lineTo", &Context::LineTo),
-                InstanceMethod("quadraticCurveTo", &Context::QuadraticCurveTo),
-                InstanceMethod("measureText", &Context::MeasureText),
-                InstanceMethod("stroke", &Context::Stroke),
-                InstanceMethod("fill", &Context::Fill),
-                InstanceMethod("drawImage", &Context::DrawImage),
-                InstanceMethod("getImageData", &Context::GetImageData),
-                InstanceMethod("createImageData", &Context::CreateImageData),
-                InstanceMethod("setLineDash", &Context::SetLineDash),
-                InstanceMethod("getLineDash", &Context::GetLineDash),
-                InstanceMethod("fillText", &Context::FillText),
-                InstanceMethod("strokeText", &Context::StrokeText),
-                InstanceMethod("createLinearGradient", &Context::CreateLinearGradient),
-                InstanceMethod("createRadialGradient", &Context::CreateRadialGradient),
-                InstanceMethod("getTransform", &Context::GetTransform),
-                InstanceMethod("setTransform", &Context::SetTransform),
-                InstanceMethod("transform", &Context::Transform),
-                InstanceMethod("dispose", &Context::Dispose),
-                InstanceMethod("flush", &Context::Flush),
-                InstanceAccessor("lineCap", &Context::GetLineCap, &Context::SetLineCap),
-                InstanceAccessor("lineJoin", &Context::GetLineJoin, &Context::SetLineJoin),
-                InstanceAccessor("miterLimit", &Context::GetMiterLimit, &Context::SetMiterLimit),
-                InstanceAccessor("filter", &Context::GetFilter, &Context::SetFilter),
-                InstanceAccessor("direction", &Context::GetDirection, &Context::SetDirection),
-                InstanceAccessor("font", &Context::GetFont, &Context::SetFont),
-                InstanceAccessor("letterSpacing", &Context::GetLetterSpacing, &Context::SetLetterSpacing),
-                InstanceAccessor("strokeStyle", &Context::GetStrokeStyle, &Context::SetStrokeStyle),
-                InstanceAccessor("fillStyle", &Context::GetFillStyle, &Context::SetFillStyle),
-                InstanceAccessor("globalAlpha", nullptr, &Context::SetGlobalAlpha),
-                InstanceAccessor("shadowColor", &Context::GetShadowColor, &Context::SetShadowColor),
-                InstanceAccessor("shadowBlur", &Context::GetShadowBlur, &Context::SetShadowBlur),
-                InstanceAccessor("shadowOffsetX", &Context::GetShadowOffsetX, &Context::SetShadowOffsetX),
-                InstanceAccessor("shadowOffsetY", &Context::GetShadowOffsetY, &Context::SetShadowOffsetY),
-                InstanceAccessor("lineWidth", &Context::GetLineWidth, &Context::SetLineWidth),
+                InstanceMethod("clearRect", &ContextDawn::ClearRect),
+                InstanceMethod("save", &ContextDawn::Save),
+                InstanceMethod("restore", &ContextDawn::Restore),
+                InstanceMethod("fillRect", &ContextDawn::FillRect),
+                InstanceMethod("scale", &ContextDawn::Scale),
+                InstanceMethod("rotate", &ContextDawn::Rotate),
+                InstanceMethod("translate", &ContextDawn::Translate),
+                InstanceMethod("strokeRect", &ContextDawn::StrokeRect),
+                InstanceMethod("rect", &ContextDawn::Rect),
+                InstanceMethod("roundRect", &ContextDawn::RoundRect),
+                InstanceMethod("clip", &ContextDawn::Clip),
+                InstanceMethod("putImageData", &ContextDawn::PutImageData),
+                InstanceMethod("arc", &ContextDawn::Arc),
+                InstanceMethod("beginPath", &ContextDawn::BeginPath),
+                InstanceMethod("closePath", &ContextDawn::ClosePath),
+                InstanceMethod("moveTo", &ContextDawn::MoveTo),
+                InstanceMethod("lineTo", &ContextDawn::LineTo),
+                InstanceMethod("quadraticCurveTo", &ContextDawn::QuadraticCurveTo),
+                InstanceMethod("measureText", &ContextDawn::MeasureTextDawn),
+                InstanceMethod("stroke", &ContextDawn::Stroke),
+                InstanceMethod("fill", &ContextDawn::Fill),
+                InstanceMethod("drawImage", &ContextDawn::DrawImage),
+                InstanceMethod("getImageData", &ContextDawn::GetImageData),
+                InstanceMethod("createImageData", &ContextDawn::CreateImageData),
+                InstanceMethod("setLineDash", &ContextDawn::SetLineDash),
+                InstanceMethod("getLineDash", &ContextDawn::GetLineDash),
+                InstanceMethod("fillText", &ContextDawn::FillText),
+                InstanceMethod("strokeText", &ContextDawn::StrokeText),
+                InstanceMethod("createLinearGradient", &ContextDawn::CreateLinearGradient),
+                InstanceMethod("createRadialGradient", &ContextDawn::CreateRadialGradient),
+                InstanceMethod("getTransform", &ContextDawn::GetTransform),
+                InstanceMethod("setTransform", &ContextDawn::SetTransform),
+                InstanceMethod("transform", &ContextDawn::Transform),
+                InstanceMethod("dispose", &ContextDawn::Dispose),
+                InstanceMethod("flush", &ContextDawn::Flush),
+                InstanceAccessor("lineCap", &ContextDawn::GetLineCap, &ContextDawn::SetLineCap),
+                InstanceAccessor("lineJoin", &ContextDawn::GetLineJoin, &ContextDawn::SetLineJoin),
+                InstanceAccessor("miterLimit", &ContextDawn::GetMiterLimit, &ContextDawn::SetMiterLimit),
+                InstanceAccessor("filter", &ContextDawn::GetFilter, &ContextDawn::SetFilter),
+                InstanceAccessor("direction", &ContextDawn::GetDirection, &ContextDawn::SetDirection),
+                InstanceAccessor("font", &ContextDawn::GetFont, &ContextDawn::SetFont),
+                InstanceAccessor("letterSpacing", &ContextDawn::GetLetterSpacing, &ContextDawn::SetLetterSpacing),
+                InstanceAccessor("strokeStyle", &ContextDawn::GetStrokeStyle, &ContextDawn::SetStrokeStyle),
+                InstanceAccessor("fillStyle", &ContextDawn::GetFillStyle, &ContextDawn::SetFillStyle),
+                InstanceAccessor("globalAlpha", nullptr, &ContextDawn::SetGlobalAlpha),
+                InstanceAccessor("shadowColor", &ContextDawn::GetShadowColor, &ContextDawn::SetShadowColor),
+                InstanceAccessor("shadowBlur", &ContextDawn::GetShadowBlur, &ContextDawn::SetShadowBlur),
+                InstanceAccessor("shadowOffsetX", &ContextDawn::GetShadowOffsetX, &ContextDawn::SetShadowOffsetX),
+                InstanceAccessor("shadowOffsetY", &ContextDawn::GetShadowOffsetY, &ContextDawn::SetShadowOffsetY),
+                InstanceAccessor("lineWidth", &ContextDawn::GetLineWidth, &ContextDawn::SetLineWidth),
             });
         JsRuntime::NativeObject::GetFromJavaScript(env).Set(JS_CONTEXT_CONSTRUCTOR_NAME, func);
     }
 
-    Napi::Value Context::CreateInstance(Napi::Env env, Napi::Value canvas)
+    Napi::Value ContextDawn::CreateInstance(Napi::Env env, Napi::Value canvas)
     {
         auto func = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_CONTEXT_CONSTRUCTOR_NAME).As<Napi::Function>();
         return func.New({canvas});
     }
 
-    Context::Context(const Napi::CallbackInfo& info)
-        : Napi::ObjectWrap<Context>{info}
-        , m_canvas{NativeCanvas::Unwrap(info[0].As<Napi::Object>())}
-        , m_nvg{std::make_shared<NVGcontext*>(nvgCreate(1))}
-        , m_graphicsContext{m_canvas->GetGraphicsContext()}
+    ContextDawn::ContextDawn(const Napi::CallbackInfo& info)
+        : Napi::ObjectWrap<ContextDawn>{info}
+        , m_canvas{NativeCanvasDawn::Unwrap(info[0].As<Napi::Object>())}
+        , m_nvg{std::make_shared<NVGcontext*>(NvgCreateDawn(m_canvas->GetDevice(), NativeCanvasDawn::ColorFormat(), 1))}
         , m_cancellationSource{std::make_shared<arcana::cancellation_source>()}
         , m_runtimeScheduler{Babylon::JsRuntime::GetFromJavaScript(info.Env())}
-        , Polyfills::Canvas::Impl::MonitoredResource{Polyfills::Canvas::Impl::GetFromJavaScript(info.Env())}
     {
         // TODO: commented code doesn't compile with napi-jsi. Using non read-only property for now
         //info.This().ToObject().DefineProperty(Napi::PropertyDescriptor::Value("canvas", info[0], napi_enumerable));
         info.This().ToObject().Set("canvas", info[0]);
 
-        // Fonts loaded after this Context is created are picked up in Flush().
+        // Fonts loaded after this ContextDawn is created are picked up in Flush().
     }
 
-    Context::~Context()
+    ContextDawn::~ContextDawn()
     {
         Dispose();
         m_cancellationSource->cancel();
     }
 
-    void Context::Dispose(const Napi::CallbackInfo&)
+    void ContextDawn::Dispose(const Napi::CallbackInfo&)
     {
         Dispose();
     }
 
-    void Context::FlushGraphicResources()
-    {
-        Dispose();
-    }
 
-    void Context::Dispose()
+    void ContextDawn::Dispose()
     {
         if (m_nvg)
         {
@@ -151,13 +164,13 @@ namespace Babylon::Polyfills::Internal
             {
                 nvgDeleteImage(*m_nvg, image.second);
             }
-            nvgDelete(*m_nvg);
+            NvgDeleteDawn(*m_nvg);
             m_nvg = nullptr;
         }
 
     }
 
-    void Context::BindFillStyle(const Napi::CallbackInfo& info)
+    void ContextDawn::BindFillStyle(const Napi::CallbackInfo& info)
     {
         if (std::holds_alternative<std::string>(m_fillStyle))
         {
@@ -179,7 +192,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::SetFilterStack()
+    void ContextDawn::SetFilterStack()
     {
         if (m_filter.length())
         {
@@ -189,7 +202,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::FillRect(const Napi::CallbackInfo& info)
+    void ContextDawn::FillRect(const Napi::CallbackInfo& info)
     {
         auto left = info[0].As<Napi::Number>().FloatValue();
         auto top = info[1].As<Napi::Number>().FloatValue();
@@ -213,7 +226,7 @@ namespace Babylon::Polyfills::Internal
         nvgFill(*m_nvg);
     }
 
-    Napi::Value Context::GetFillStyle(const Napi::CallbackInfo&)
+    Napi::Value ContextDawn::GetFillStyle(const Napi::CallbackInfo&)
     {
         if (std::holds_alternative<std::string>(m_fillStyle))
         {
@@ -225,7 +238,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::SetFillStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetFillStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         if (value.IsString())
         {
@@ -241,30 +254,30 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::GetStrokeStyle(const Napi::CallbackInfo&)
+    Napi::Value ContextDawn::GetStrokeStyle(const Napi::CallbackInfo&)
     {
         return Napi::Value::From(Env(), m_strokeStyle);
     }
 
-    void Context::SetStrokeStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetStrokeStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         m_strokeStyle = value.As<Napi::String>().Utf8Value();
         auto color = StringToColor(info.Env(), m_strokeStyle);
         nvgStrokeColor(*m_nvg, color);
     }
 
-    Napi::Value Context::GetLineWidth(const Napi::CallbackInfo&)
+    Napi::Value ContextDawn::GetLineWidth(const Napi::CallbackInfo&)
     {
         return Napi::Value::From(Env(), m_lineWidth);
     }
 
-    void Context::SetLineWidth(const Napi::CallbackInfo&, const Napi::Value& value)
+    void ContextDawn::SetLineWidth(const Napi::CallbackInfo&, const Napi::Value& value)
     {
         m_lineWidth = value.As<Napi::Number>().FloatValue();
         nvgStrokeWidth(*m_nvg, m_lineWidth);
     }
 
-    void Context::Fill(const Napi::CallbackInfo& info)
+    void ContextDawn::Fill(const Napi::CallbackInfo& info)
     {
         SetFilterStack();
 
@@ -282,7 +295,7 @@ namespace Babylon::Polyfills::Internal
         nvgFill(*m_nvg);
     }
 
-    void Context::Save(const Napi::CallbackInfo&)
+    void ContextDawn::Save(const Napi::CallbackInfo&)
     {
         nvgSave(*m_nvg);
         // Track our wrapper-side fillStyle/strokeStyle alongside the nvg state stack so that
@@ -291,7 +304,7 @@ namespace Babylon::Polyfills::Internal
         m_savedStyles.push_back({m_fillStyle, m_strokeStyle});
     }
 
-    void Context::Restore(const Napi::CallbackInfo&)
+    void ContextDawn::Restore(const Napi::CallbackInfo&)
     {
         nvgRestore(*m_nvg);
         m_isClipped = false;
@@ -304,7 +317,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::ClearRect(const Napi::CallbackInfo& info)
+    void ContextDawn::ClearRect(const Napi::CallbackInfo& info)
     {
         const float x = info[0].As<Napi::Number>().FloatValue();
         const float y = info[1].As<Napi::Number>().FloatValue();
@@ -325,39 +338,39 @@ namespace Babylon::Polyfills::Internal
         nvgRestore(*m_nvg);
     }
 
-    void Context::Translate(const Napi::CallbackInfo& info)
+    void ContextDawn::Translate(const Napi::CallbackInfo& info)
     {
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
         nvgTranslate(*m_nvg, x, y);
     }
 
-    void Context::Rotate(const Napi::CallbackInfo& info)
+    void ContextDawn::Rotate(const Napi::CallbackInfo& info)
     {
         const auto angle = info[0].As<Napi::Number>().FloatValue();
         nvgRotate(*m_nvg, angle);
     }
 
-    void Context::Scale(const Napi::CallbackInfo& info)
+    void ContextDawn::Scale(const Napi::CallbackInfo& info)
     {
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
         nvgScale(*m_nvg, x, y);
     }
 
-    void Context::BeginPath(const Napi::CallbackInfo&)
+    void ContextDawn::BeginPath(const Napi::CallbackInfo&)
     {
         m_isClipped = false;
         m_pathHasNonRect = false;
         nvgBeginPath(*m_nvg);
     }
 
-    void Context::ClosePath(const Napi::CallbackInfo&)
+    void ContextDawn::ClosePath(const Napi::CallbackInfo&)
     {
         nvgClosePath(*m_nvg);
     }
 
-    void Context::Rect(const Napi::CallbackInfo& info)
+    void ContextDawn::Rect(const Napi::CallbackInfo& info)
     {
         const auto left = info[0].As<Napi::Number>().FloatValue();
         const auto top = info[1].As<Napi::Number>().FloatValue();
@@ -368,7 +381,7 @@ namespace Babylon::Polyfills::Internal
         m_rectangleClipping = {left, top, width, height};
     }
 
-    void Context::RoundRect(const Napi::CallbackInfo& info)
+    void ContextDawn::RoundRect(const Napi::CallbackInfo& info)
     {
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
@@ -420,7 +433,7 @@ namespace Babylon::Polyfills::Internal
             }
         }
         // DOMPoint
-        // TODO: move duplicate Path2D & Context args parsing into a utils.cpp
+        // TODO: move duplicate Path2D & ContextDawn args parsing into a utils.cpp
         else if (radii.IsObject())
         {
             const auto dompoint = radii.As<Napi::Object>();
@@ -436,7 +449,7 @@ namespace Babylon::Polyfills::Internal
         m_rectangleClipping = {x, y, width, height};
     }
 
-    void Context::Clip(const Napi::CallbackInfo& /*info*/)
+    void ContextDawn::Clip(const Napi::CallbackInfo& /*info*/)
     {
         // A non-rectangular clip path cannot be expressed as a scissor rectangle.
         // Emulate it by leaving the path current so the next fill draws it, and
@@ -458,7 +471,7 @@ namespace Babylon::Polyfills::Internal
         nvgScissor(*m_nvg, m_rectangleClipping.left - 1, m_rectangleClipping.top - 1, w + 1, h + 1);
     }
 
-    void Context::StrokeRect(const Napi::CallbackInfo& info)
+    void ContextDawn::StrokeRect(const Napi::CallbackInfo& info)
     {
         const auto left = info[0].As<Napi::Number>().FloatValue();
         const auto top = info[1].As<Napi::Number>().FloatValue();
@@ -470,7 +483,7 @@ namespace Babylon::Polyfills::Internal
         nvgStroke(*m_nvg);
     }
 
-    void Context::PlayPath2D(const NativeCanvasPath2D* path)
+    void ContextDawn::PlayPath2D(const NativeCanvasPath2D* path)
     {
         m_isClipped = false;
         m_pathHasNonRect = true;
@@ -547,7 +560,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::Stroke(const Napi::CallbackInfo& info)
+    void ContextDawn::Stroke(const Napi::CallbackInfo& info)
     {
         // draw Path2D if exists
         const NativeCanvasPath2D* path = info.Length() == 1 ? NativeCanvasPath2D::Unwrap(info[0].As<Napi::Object>()) : nullptr;
@@ -560,7 +573,7 @@ namespace Babylon::Polyfills::Internal
         nvgStroke(*m_nvg);
     }
 
-    void Context::MoveTo(const Napi::CallbackInfo& info)
+    void ContextDawn::MoveTo(const Napi::CallbackInfo& info)
     {
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
@@ -569,7 +582,7 @@ namespace Babylon::Polyfills::Internal
         nvgMoveTo(*m_nvg, x, y);
     }
 
-    void Context::LineTo(const Napi::CallbackInfo& info)
+    void ContextDawn::LineTo(const Napi::CallbackInfo& info)
     {
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
@@ -578,7 +591,7 @@ namespace Babylon::Polyfills::Internal
         nvgLineTo(*m_nvg, x, y);
     }
 
-    void Context::QuadraticCurveTo(const Napi::CallbackInfo& info)
+    void ContextDawn::QuadraticCurveTo(const Napi::CallbackInfo& info)
     {
         const auto cx = info[0].As<Napi::Number>().FloatValue();
         const auto cy = info[1].As<Napi::Number>().FloatValue();
@@ -589,7 +602,7 @@ namespace Babylon::Polyfills::Internal
         nvgBezierTo(*m_nvg, cx, cy, cx, cy, x, y);
     }
 
-    Napi::Value Context::MeasureText(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::MeasureTextDawn(const Napi::CallbackInfo& info)
     {
         std::string text{info[0].As<Napi::String>()};
 
@@ -622,10 +635,10 @@ namespace Babylon::Polyfills::Internal
             return obj.As<Napi::Value>();
         }
 
-        return MeasureText::CreateInstance(info.Env(), this, text);
+        return MeasureTextDawn::CreateInstance(info.Env(), this, text);
     }
 
-    bool Context::SetFontFaceId()
+    bool ContextDawn::SetFontFaceId()
     {
         EnsureFontsLoaded();
         if (m_fonts.empty())
@@ -643,7 +656,7 @@ namespace Babylon::Polyfills::Internal
         return true;
     }
 
-    void Context::FillText(const Napi::CallbackInfo& info)
+    void ContextDawn::FillText(const Napi::CallbackInfo& info)
     {
         std::string text = info[0].As<Napi::String>().Utf8Value();
         auto x = info[1].As<Napi::Number>().FloatValue();
@@ -669,10 +682,10 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::EnsureFontsLoaded()
+    void ContextDawn::EnsureFontsLoaded()
     {
-        // Pick up any fonts that were loaded after this Context was created.
-        for (auto& font : NativeCanvas::fontsInfos)
+        // Pick up any fonts that were loaded after this ContextDawn was created.
+        for (auto& font : NativeCanvasDawn::fontsInfos)
         {
             if (m_fonts.end() == m_fonts.find(font.first))
             {
@@ -682,106 +695,33 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::Flush(const Napi::CallbackInfo& info)
+    void ContextDawn::Flush(const Napi::CallbackInfo& info)
     {
-        // Pick up any fonts loaded after this Context was created (#1683).
+        // Pick up any fonts loaded after this ContextDawn was created (#1683).
         EnsureFontsLoaded();
-
-        // If called outside the frame cycle (e.g., during initialization/font loading
-        // or async texture load callbacks), acquire a FrameCompletionScope which blocks
-        // until StartRenderingCurrentFrame provides the encoder.
-        std::optional<Graphics::FrameCompletionScope> scope;
-        if (m_graphicsContext.GetActiveEncoder() == nullptr)
-        {
-            scope.emplace(m_graphicsContext.AcquireFrameCompletionScope());
-        }
-
-        // A canvas flush is the one stretch of a frame that acquires views without ever
-        // reaching NativeEngine::GetEncoder, so no budget check runs inside it. Its cost is
-        // not bounded either: the pool recycles framebuffers but not view ids (Acquire ->
-        // Bind() drops the cached id, the draw re-acquires, Release -> Clear() acquires
-        // again), so it scales with filter-op count. That means kViewFlushMargin cannot be
-        // sized to cover it, and a frame that is just under the flush threshold on entry
-        // here would run past maxViews and throw "Too many views".
-        //
-        // Check once, here. This is the only safe point in the flush:
-        //   - after the scope above, so m_pendingFrameScopes > 0 and the flush handshake is
-        //     actually serviceable by the parked render thread (it no-ops otherwise);
-        //   - before the encoder is read below, so a flush that swaps the frame encoder
-        //     cannot leave us holding a stale pointer;
-        //   - before nvgBeginFrame, so no nanovg transient buffer exists to be invalidated
-        //     (those are allocated in glnvg__renderFlush during nvgEndFrame).
-        // This does not bound a single canvas' cost, but it reduces the requirement from
-        // "the margin must cover an arbitrary canvas" to "one canvas must fit in maxViews".
-        m_graphicsContext.FlushViewsIfNeeded();
-
-        bgfx::Encoder* encoder = m_graphicsContext.GetActiveEncoder();
-        if (encoder == nullptr)
-        {
-            return;
-        }
-
-        // Discard any residual encoder state from NativeEngine rendering.
-        // In the old model Canvas had its own per-thread encoder with clean state;
-        // now it shares the frame encoder with NativeEngine.
-        encoder->discard(BGFX_DISCARD_ALL);
 
         try
         {
-            // The entire flush is wrapped: bgfx framebuffer pool exhaustion can throw both from
-            // UpdateRenderTarget() and from FrameBufferPool::Acquire() reached via nvgEndFrame()
-            // below. Converting any such C++ failure into a catchable JS error lets the offending
-            // test fail cleanly instead of aborting the whole sweep.
-            const bool needClear = m_canvas->UpdateRenderTarget();
+            // Unlike the bgfx path there is no shared frame encoder and no view-id
+            // budget to negotiate: the canvas owns its own offscreen texture and
+            // records a self-contained render pass into a private command encoder.
+            // That makes a flush valid at any point, including outside the frame
+            // cycle (font loading, async image decode callbacks).
+            const uint32_t width = m_canvas->GetWidth();
+            const uint32_t height = m_canvas->GetHeight();
 
-            Graphics::FrameBuffer& frameBuffer = m_canvas->GetFrameBuffer();
-
-            frameBuffer.Bind();
-            if (needClear)
+            NativeCanvasDawn::RenderPass pass = m_canvas->BeginFrame();
+            if (pass.encoder == nullptr)
             {
-                frameBuffer.Clear(*encoder, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0, 1.f, 0);
+                return;
             }
-            frameBuffer.SetViewPort(0.f, 0.f, 1.f, 1.f);
-            const auto width = m_canvas->GetWidth();
-            const auto height = m_canvas->GetHeight();
 
-            for (auto& buffer : m_canvas->m_frameBufferPool.GetPoolBuffers())
-            {
-                // sanity check no buffers should have been acquired yet
-                assert(buffer.isAvailable == true);
-            }
-            std::function<Babylon::Graphics::FrameBuffer*()> acquire = [this]() -> Babylon::Graphics::FrameBuffer* {
-                Babylon::Graphics::FrameBuffer *frameBuffer = this->m_canvas->m_frameBufferPool.Acquire();
-                frameBuffer->Bind();
-                return frameBuffer;
-            };
-            std::function<void(Babylon::Graphics::FrameBuffer*)> release = [this, encoder](Babylon::Graphics::FrameBuffer* frameBuffer) -> void {
-                // clear framebuffer when released
-                frameBuffer->Clear(*encoder, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0, 1.f, 0);
-                this->m_canvas->m_frameBufferPool.Release(frameBuffer);
-                frameBuffer->Unbind();
-            };
-
-            nvgBeginFrame(*m_nvg, float(width), float(height), 1.0f);
-            nvgSetFrameBufferAndEncoder(*m_nvg, frameBuffer, encoder);
-            nvgSetFrameBufferPool(*m_nvg, { acquire, release });
+            NvgSetDawnRenderPass(*m_nvg, pass.encoder);
+            nvgBeginFrame(*m_nvg, static_cast<float>(width), static_cast<float>(height), 1.0f);
             nvgEndFrame(*m_nvg);
-            frameBuffer.Unbind();
+            NvgSetDawnRenderPass(*m_nvg, nullptr);
 
-            // Reserve the view id for the eventual canvas->texture blit NOW, while we are
-            // sequenced immediately after this canvas' draws but before the scene/backbuffer
-            // render is recorded. bgfx processes blits in numeric view-id order, so the copy
-            // must land AFTER the canvas Flush (source ready) yet BEFORE the fullscreen ADT
-            // layer samples the destination texture. Deferring to CopyTexture's
-            // PeekNextViewId() would place the blit after the backbuffer view, so the layer
-            // would sample the previous frame's content (a one-frame GUI latency).
-            m_canvas->SetBlitViewId(m_graphicsContext.AcquireNewViewId(), m_graphicsContext.ViewIdGeneration());
-
-            for (auto& buffer : m_canvas->m_frameBufferPool.GetPoolBuffers())
-            {
-                // sanity check no unreleased buffers
-                assert(buffer.isAvailable == true);
-            }
+            m_canvas->EndFrame(pass);
         }
         catch (const std::exception& ex)
         {
@@ -789,7 +729,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::PutImageData(const Napi::CallbackInfo& info)
+    void ContextDawn::PutImageData(const Napi::CallbackInfo& info)
     {
         Napi::Env env = info.Env();
 
@@ -908,7 +848,7 @@ namespace Babylon::Polyfills::Internal
             dx + x0, dy + y0, copyWidth, copyHeight);
     }
 
-    void Context::Arc(const Napi::CallbackInfo& info)
+    void ContextDawn::Arc(const Napi::CallbackInfo& info)
     {
         const auto x = static_cast<float>(info[0].As<Napi::Number>().DoubleValue());
         const auto y = static_cast<float>(info[1].As<Napi::Number>().DoubleValue());
@@ -920,7 +860,7 @@ namespace Babylon::Polyfills::Internal
         nvgArc(*m_nvg, x, y, radius, startAngle, endAngle, winding);
     }
 
-    void Context::EnsureCpuBuffer()
+    void ContextDawn::EnsureCpuBuffer()
     {
         const uint32_t width = m_canvas != nullptr ? m_canvas->GetWidth() : 0;
         const uint32_t height = m_canvas != nullptr ? m_canvas->GetHeight() : 0;
@@ -941,7 +881,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::BlitPixelsToCpu(const uint8_t* src, uint32_t srcWidth, uint32_t srcHeight, int32_t sx, int32_t sy, uint32_t sw, uint32_t sh, int32_t dx, int32_t dy, uint32_t dw, uint32_t dh)
+    void ContextDawn::BlitPixelsToCpu(const uint8_t* src, uint32_t srcWidth, uint32_t srcHeight, int32_t sx, int32_t sy, uint32_t sw, uint32_t sh, int32_t dx, int32_t dy, uint32_t dw, uint32_t dh)
     {
         if (src == nullptr || dw == 0 || dh == 0 || sw == 0 || sh == 0 || srcWidth == 0 || srcHeight == 0)
         {
@@ -993,7 +933,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::ReadPixels(int32_t sx, int32_t sy, uint32_t w, uint32_t h, uint8_t* dst)
+    void ContextDawn::ReadPixels(int32_t sx, int32_t sy, uint32_t w, uint32_t h, uint8_t* dst)
     {
         const size_t total = static_cast<size_t>(w) * h * 4;
         std::memset(dst, 0, total);
@@ -1033,7 +973,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::DrawImage(const Napi::CallbackInfo& info)
+    void ContextDawn::DrawImage(const Napi::CallbackInfo& info)
     {
         Napi::Object imageObj = info[0].As<Napi::Object>();
 
@@ -1094,7 +1034,7 @@ namespace Babylon::Polyfills::Internal
             {
                 std::memcpy(rgba.data(), srcBytes, rgba.size());
             }
-            else if (!bimg::imageConvert(&Graphics::DeviceContext::GetDefaultAllocator(), rgba.data(), bimg::TextureFormat::RGBA8, srcBytes, format, width, height, 1))
+            else if (!bimg::imageConvert(&ImageDecodeAllocator(), rgba.data(), bimg::TextureFormat::RGBA8, srcBytes, format, width, height, 1))
             {
                 throw Napi::Error::New(info.Env(), "drawImage: unsupported ImageBitmap pixel format.");
             }
@@ -1108,8 +1048,51 @@ namespace Babylon::Polyfills::Internal
 #endif
         }
 
-        const NativeCanvasImage* canvasImage = NativeCanvasImage::Unwrap(imageObj);
+        // Babylon GUI composites one canvas into another: AdvancedDynamicTexture's
+        // bitmap cache, the ColorPicker's colour wheel and Image controls all do
+        // context.drawImage(<canvas>, ...). Such a source is a DOM canvas object,
+        // not a NativeCanvasImage, so unwrapping it below would dereference an
+        // unrelated pointer and crash. Rasterize it and draw its pixels instead.
+        if (imageObj.Has("__nvgCanvas") || imageObj.Has("__pixels"))
+        {
+            if (imageObj.Has("__nvgCanvas"))
+            {
+                SyncDawnCanvasPixels(info.Env(), imageObj);
+            }
 
+            Napi::Value pixelsValue = imageObj.Get("__pixels");
+            const auto srcWidthInt = imageObj.Get("width").ToNumber().Int32Value();
+            const auto srcHeightInt = imageObj.Get("height").ToNumber().Int32Value();
+            if (!pixelsValue.IsArrayBuffer() || srcWidthInt <= 0 || srcHeightInt <= 0)
+            {
+                return;
+            }
+
+            const auto width = static_cast<uint32_t>(srcWidthInt);
+            const auto height = static_cast<uint32_t>(srcHeightInt);
+            auto arrayBuffer = pixelsValue.As<Napi::ArrayBuffer>();
+            if (arrayBuffer.ByteLength() < static_cast<uint64_t>(width) * height * 4u)
+            {
+                return;
+            }
+
+            const auto* pixels = static_cast<const uint8_t*>(arrayBuffer.Data());
+            const int canvasImageIndex = nvgCreateImageRGBA(*m_nvg, static_cast<int>(width), static_cast<int>(height), 0, pixels);
+            DrawImageCommon(info, canvasImageIndex, pixels, width, height);
+            nvgDeleteImage(*m_nvg, canvasImageIndex);
+            return;
+        }
+
+        // Anything else must be an Image; Napi::ObjectWrap::Unwrap() cannot tell
+        // an unrelated wrapped object apart from one of ours, so verify the
+        // prototype first and report a usable error rather than crashing.
+        Napi::Value imageConstructor = JsRuntime::NativeObject::GetFromJavaScript(info.Env()).Get("Image");
+        if (!imageConstructor.IsFunction() || !imageObj.InstanceOf(imageConstructor.As<Napi::Function>()))
+        {
+            throw Napi::Error::New(info.Env(), "drawImage: the source is not an Image, a canvas or an ImageBitmap.");
+        }
+
+        const NativeCanvasImage* canvasImage = NativeCanvasImage::Unwrap(imageObj);
         int imageIndex{-1};
         const auto nvgImageIter = m_nvgImageIndices.find(canvasImage);
         if (nvgImageIter == m_nvgImageIndices.end())
@@ -1126,7 +1109,7 @@ namespace Babylon::Polyfills::Internal
         DrawImageCommon(info, imageIndex, canvasImage->GetPixels(), canvasImage->GetWidth(), canvasImage->GetHeight());
     }
 
-    void Context::DrawImageCommon(const Napi::CallbackInfo& info, int imageIndex, const uint8_t* srcPixels, uint32_t srcWidth, uint32_t srcHeight)
+    void ContextDawn::DrawImageCommon(const Napi::CallbackInfo& info, int imageIndex, const uint8_t* srcPixels, uint32_t srcWidth, uint32_t srcHeight)
     {
         const auto imgWidth = static_cast<float>(srcWidth);
         const auto imgHeight = static_cast<float>(srcHeight);
@@ -1224,7 +1207,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::GetImageData(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetImageData(const Napi::CallbackInfo& info)
     {
         if (info.Length() < 4)
         {
@@ -1238,7 +1221,7 @@ namespace Babylon::Polyfills::Internal
 
         // Parse the extents as signed. Read via Uint32Value, a width of -1 wraps to 4294967295,
         // and the size_t guard below does not catch it on 64-bit because 4294967295 * 1 is far
-        // below SIZE_MAX/4, so ImageData would go on to allocate roughly 17 GB.
+        // below SIZE_MAX/4, so ImageDataDawn would go on to allocate roughly 17 GB.
         //
         // A negative extent is legal: the browser treats it as a rectangle running in the
         // opposite direction and returns the normalized region, so fold the sign into the
@@ -1271,13 +1254,13 @@ namespace Babylon::Polyfills::Internal
         }
 
         // The region is caller-supplied and backs a width*height*4 allocation, so reject sizes
-        // that would overflow size_t before ImageData tries to allocate them.
+        // that would overflow size_t before ImageDataDawn tries to allocate them.
         if (static_cast<uint64_t>(sw) * sh > std::numeric_limits<size_t>::max() / 4)
         {
             throw Napi::RangeError::New(info.Env(), "Context2D.getImageData: requested region is too large.");
         }
 
-        return ImageData::CreateInstance(info.Env(), this, sx, sy, sw, sh);
+        return ImageDataDawn::CreateInstance(info.Env(), this, sx, sy, sw, sh);
     }
 
     namespace
@@ -1305,8 +1288,15 @@ namespace Babylon::Polyfills::Internal
             else if (info.Length() >= 1 && info[0].IsObject())
             {
                 const auto source = info[0].As<Napi::Object>();
-                width = source.Get("width").As<Napi::Number>().Uint32Value();
-                height = source.Get("height").As<Napi::Number>().Uint32Value();
+                const auto w = source.Get("width");
+                const auto h = source.Get("height");
+                if (!w.IsNumber() || !h.IsNumber())
+                {
+                    throw Napi::TypeError::New(info.Env(), "Context2D.createImageData: argument is not an ImageData");
+                }
+
+                width = w.As<Napi::Number>().Uint32Value();
+                height = h.As<Napi::Number>().Uint32Value();
             }
             else
             {
@@ -1326,16 +1316,16 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::CreateImageData(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::CreateImageData(const Napi::CallbackInfo& info)
     {
         uint32_t width{}, height{};
         ParseCreateImageDataArgs(info, width, height);
         // A null context means "do not read back the framebuffer", so the ImageData is
         // left as the transparent black the spec requires.
-        return ImageData::CreateInstance(info.Env(), nullptr, 0, 0, width, height);
+        return ImageDataDawn::CreateInstance(info.Env(), nullptr, 0, 0, width, height);
     }
 
-    void Context::SetLineDash(const Napi::CallbackInfo& info)
+    void ContextDawn::SetLineDash(const Napi::CallbackInfo& info)
     {
         // An empty (or absent) dash list means "solid", which is exactly what we
         // already draw -- so accept it silently. Babylon GUI's Line and MultiLine
@@ -1386,7 +1376,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::GetLineDash(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetLineDash(const Napi::CallbackInfo& info)
     {
         auto segments = Napi::Array::New(info.Env(), m_lineDash.size());
         for (size_t index = 0; index < m_lineDash.size(); ++index)
@@ -1396,7 +1386,7 @@ namespace Babylon::Polyfills::Internal
         return segments;
     }
 
-    void Context::StrokeText(const Napi::CallbackInfo& info)
+    void ContextDawn::StrokeText(const Napi::CallbackInfo& info)
     {
         std::string text = info[0].As<Napi::String>().Utf8Value();
         auto x = info[1].As<Napi::Number>().FloatValue();
@@ -1413,7 +1403,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::CreateLinearGradient(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::CreateLinearGradient(const Napi::CallbackInfo& info)
     {
         const auto x0 = info[0].As<Napi::Number>().FloatValue();
         const auto y0 = info[1].As<Napi::Number>().FloatValue();
@@ -1424,7 +1414,7 @@ namespace Babylon::Polyfills::Internal
         return gradient;
     }
 
-    Napi::Value Context::CreateRadialGradient(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::CreateRadialGradient(const Napi::CallbackInfo& info)
     {
         const auto x0 = info[0].As<Napi::Number>().FloatValue();
         const auto y0 = info[1].As<Napi::Number>().FloatValue();
@@ -1437,7 +1427,7 @@ namespace Babylon::Polyfills::Internal
         return gradient;
     }
 
-    Napi::Value Context::GetTransform(const Napi::CallbackInfo&)
+    Napi::Value ContextDawn::GetTransform(const Napi::CallbackInfo&)
     {
         float xform[6];
         nvgCurrentTransform(*m_nvg, xform);
@@ -1471,7 +1461,7 @@ namespace Babylon::Polyfills::Internal
         return obj;
     }
 
-    void Context::SetTransform(const Napi::CallbackInfo& info)
+    void ContextDawn::SetTransform(const Napi::CallbackInfo& info)
     {
         const auto a = info[0].As<Napi::Number>().FloatValue();
         const auto b = info[1].As<Napi::Number>().FloatValue();
@@ -1483,7 +1473,7 @@ namespace Babylon::Polyfills::Internal
         nvgTransform(*m_nvg, a, b, c, d, e, f);
     }
 
-    void Context::Transform(const Napi::CallbackInfo& info)
+    void ContextDawn::Transform(const Napi::CallbackInfo& info)
     {
         const auto a = info[0].As<Napi::Number>().FloatValue();
         const auto b = info[1].As<Napi::Number>().FloatValue();
@@ -1494,47 +1484,47 @@ namespace Babylon::Polyfills::Internal
         nvgTransform(*m_nvg, a, b, c, d, e, f);
     }
 
-    Napi::Value Context::GetLineCap(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetLineCap(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), m_lineCap);
     }
 
-    void Context::SetLineCap(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetLineCap(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         m_lineCap = value.As<Napi::String>().Utf8Value();
         const auto lineCap = StringToLineCap(info.Env(), m_lineCap);
         nvgLineCap(*m_nvg, lineCap);
     }
 
-    Napi::Value Context::GetLineJoin(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetLineJoin(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), m_lineJoin);
     }
 
-    void Context::SetLineJoin(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetLineJoin(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         m_lineJoin = value.As<Napi::String>().Utf8Value();
         const auto lineJoin = StringToLineJoin(info.Env(), m_lineJoin);
         nvgLineJoin(*m_nvg, lineJoin);
     }
 
-    Napi::Value Context::GetMiterLimit(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetMiterLimit(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), m_miterLimit);
     }
 
-    void Context::SetMiterLimit(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetMiterLimit(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         m_miterLimit = value.As<Napi::Number>().FloatValue();
         nvgMiterLimit(*m_nvg, m_miterLimit);
     }
 
-    Napi::Value Context::GetFilter(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetFilter(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), m_filter);
     }
 
-    void Context::SetFilter(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetFilter(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         std::string filterString = value.As<Napi::String>().Utf8Value();
         // Keep existing filter if the new one is invalid
@@ -1544,12 +1534,12 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::GetDirection(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetDirection(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), m_direction);
     }
 
-    void Context::SetDirection(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetDirection(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         std::string direction = value.As<Napi::String>().Utf8Value();
         const bool valid = !(direction.compare("ltr") && direction.compare("rtl"));
@@ -1559,12 +1549,12 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    Napi::Value Context::GetFont(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetFont(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(Env(), static_cast<std::string>(m_font));
     }
 
-    void Context::SetFont(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetFont(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         if (!value.IsString())
         {
@@ -1592,7 +1582,7 @@ namespace Babylon::Polyfills::Internal
         m_font = std::move(*font);
     }
 
-    Napi::Value Context::GetLetterSpacing(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetLetterSpacing(const Napi::CallbackInfo& info)
     {
         std::string letterSpacingStr = std::to_string(m_letterSpacing);
         letterSpacingStr.erase(letterSpacingStr.find_last_not_of('0') + 1, std::string::npos);
@@ -1600,7 +1590,7 @@ namespace Babylon::Polyfills::Internal
         return Napi::Value::From(Env(), letterSpacingStr + "px");
     }
 
-    void Context::SetLetterSpacing(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetLetterSpacing(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         const std::string letterSpacingOption = value.ToString();
 
@@ -1614,48 +1604,48 @@ namespace Babylon::Polyfills::Internal
         nvgTextLetterSpacing(*m_nvg, m_letterSpacing);
     }
 
-    void Context::SetGlobalAlpha(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetGlobalAlpha(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         const float alpha = value.As<Napi::Number>().FloatValue();
         nvgGlobalAlpha(*m_nvg, alpha);
     }
 
-    Napi::Value Context::GetShadowColor(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetShadowColor(const Napi::CallbackInfo& info)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowColor (get): not implemented");
     }
 
-    void Context::SetShadowColor(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetShadowColor(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowColor (set): not implemented");
     }
 
-    Napi::Value Context::GetShadowBlur(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetShadowBlur(const Napi::CallbackInfo& info)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowBlur (get): not implemented");
     }
 
-    void Context::SetShadowBlur(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetShadowBlur(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowBlur (set): not implemented");
     }
 
-    Napi::Value Context::GetShadowOffsetX(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetShadowOffsetX(const Napi::CallbackInfo& info)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowOffsetX (get): not implemented");
     }
 
-    void Context::SetShadowOffsetX(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetShadowOffsetX(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowOffsetX (set): not implemented");
     }
 
-    Napi::Value Context::GetShadowOffsetY(const Napi::CallbackInfo& info)
+    Napi::Value ContextDawn::GetShadowOffsetY(const Napi::CallbackInfo& info)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowOffsetY (get): not implemented");
     }
 
-    void Context::SetShadowOffsetY(const Napi::CallbackInfo& info, const Napi::Value& value)
+    void ContextDawn::SetShadowOffsetY(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         throw Napi::Error::New(info.Env(), "Context2D.shadowOffsetY (set): not implemented");
     }

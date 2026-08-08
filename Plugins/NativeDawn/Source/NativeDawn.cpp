@@ -45,6 +45,8 @@
 #include <utility>
 #include <vector>
 
+#include "CanvasDawn.h"
+
 namespace Babylon::Plugins::NativeDawn
 {
     // Defined in ImageDecode.cpp (bimg): encoded image bytes -> RGBA8.
@@ -2663,6 +2665,9 @@ namespace Babylon::Plugins::NativeDawn
                     throw Napi::Error::New(env, "copyExternalImageToTexture: missing source");
                 }
                 Napi::Object bmp = bmpVal.As<Napi::Object>();
+                // A NanoVG-backed 2D canvas keeps its content on the GPU; flush and
+                // mirror it into __pixels so the upload path below sees it.
+                Babylon::Plugins::Internal::SyncDawnCanvasPixels(env, bmp);
                 Bytes px = GetBytes(bmp.Get("__pixels"));
                 uint32_t w = PropU32(bmp, "width", 0);
                 uint32_t h = PropU32(bmp, "height", 0);
@@ -3965,7 +3970,23 @@ namespace Babylon::Plugins::NativeDawn
                     {
                         return existing;
                     }
-                    Napi::Object c = Make2DContext(env, self);
+                    // Prefer the real NanoVG-on-WebGPU context so text, paths and
+                    // gradients actually rasterize (GUI, DynamicTexture). Fall back
+                    // to the blit-only stub if the canvas backend isn't up yet.
+                    Napi::Value c;
+                    try
+                    {
+                        c = Babylon::Plugins::Internal::AttachDawn2DContext(env, self);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        DawnLogF(LogLevel::Warn, "getContext('2d'): NanoVG canvas unavailable (%s); using blit-only stub", e.what());
+                        c = Napi::Value{};
+                    }
+                    if (!c.IsObject())
+                    {
+                        c = Make2DContext(env, self);
+                    }
                     self.Set("__ctx2d", c);
                     return c;
                 }
@@ -5044,6 +5065,14 @@ namespace Babylon::Plugins::NativeDawn
             InstallWebGPU(env);
             InstallBootstrap(env);
             InstallTestUtils(env);
+
+            // Replace the Canvas polyfill's bgfx-backed NativeCanvas (registered
+            // earlier in Runtime.cpp) with the Dawn one. The bgfx version's
+            // constructor throws on this path anyway, since it acquires the
+            // Graphics::DeviceContext that only NativeEngine creates. This gives
+            // 2D canvases — and therefore Babylon GUI, dynamic textures and text —
+            // real rendering instead of the blit-only stub.
+            Babylon::Plugins::Internal::NativeCanvasDawn::Initialize(env, g_state.device, g_state.instance);
         }
     }
 

@@ -2,10 +2,10 @@
 
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/JsRuntimeScheduler.h>
-#include <Babylon/Graphics/DeviceContext.h>
 #include "Image.h"
 #include "Path2D.h"
 #include "Font.h"
+#include "Gradient.h"
 #include "nanovg/nanovg_filterstack.h"
 #include <variant>
 #include <vector>
@@ -13,18 +13,27 @@
 
 struct NVGcontext;
 
-namespace Babylon::Polyfills::Internal
+namespace Babylon::Plugins::Internal
 {
-    class CanvasGradient;
+    // The Dawn 2D context reuses the backend-agnostic pieces of the Canvas
+    // polyfill (paths, gradients, images, fonts, colour parsing) verbatim and
+    // only replaces the submission layer, which is bgfx-specific there.
+    using Babylon::Polyfills::Internal::CanvasGradient;
+    using Babylon::Polyfills::Internal::NativeCanvasImage;
+    using Babylon::Polyfills::Internal::NativeCanvasPath2D;
+    using Babylon::Polyfills::Internal::Font;
+    using Babylon::Polyfills::Internal::FontStyle;
 
-    class Context final : public Napi::ObjectWrap<Context>, Polyfills::Canvas::Impl::MonitoredResource
+    class NativeCanvasDawn;
+
+    class ContextDawn final : public Napi::ObjectWrap<ContextDawn>
     {
     public:
         static void Initialize(Napi::Env);
         static Napi::Value CreateInstance(Napi::Env env, Napi::Value canvas);
 
-        explicit Context(const Napi::CallbackInfo& info);
-        virtual ~Context();
+        explicit ContextDawn(const Napi::CallbackInfo& info);
+        virtual ~ContextDawn();
 
         NVGcontext* GetNVGContext() const { return *m_nvg.get(); }
 
@@ -34,7 +43,7 @@ namespace Babylon::Polyfills::Internal
 
     private:
         void FillRect(const Napi::CallbackInfo&);
-        Napi::Value MeasureText(const Napi::CallbackInfo&);
+        Napi::Value MeasureTextDawn(const Napi::CallbackInfo&);
         void FillText(const Napi::CallbackInfo&);
         void Fill(const Napi::CallbackInfo&);
         void Save(const Napi::CallbackInfo&);
@@ -55,6 +64,11 @@ namespace Babylon::Polyfills::Internal
         void PutImageData(const Napi::CallbackInfo&);
         void Arc(const Napi::CallbackInfo&);
         void DrawImage(const Napi::CallbackInfo&);
+        // Set once the current path contains anything nvgScissor cannot express.
+        bool m_pathHasNonRect{false};
+        // Set when clip() had such a path and had to fall back to path emulation.
+        bool m_isClipped{false};
+
         Napi::Value GetImageData(const Napi::CallbackInfo&);
         Napi::Value CreateImageData(const Napi::CallbackInfo&);
         void SetLineDash(const Napi::CallbackInfo&);
@@ -101,7 +115,7 @@ namespace Babylon::Polyfills::Internal
         void EnsureFontsLoaded();
         void Flush(const Napi::CallbackInfo&);
 
-        NativeCanvas* m_canvas;
+        NativeCanvasDawn* m_canvas;
         std::shared_ptr<NVGcontext*> m_nvg;
 
         Font m_font;
@@ -130,25 +144,18 @@ namespace Babylon::Polyfills::Internal
         };
         std::vector<SavedStyle> m_savedStyles;
 
-        Graphics::DeviceContext& m_graphicsContext;
-
 
         struct RectangleClipping
         {
             float left, top, width, height;
         } m_rectangleClipping{};
 
-        // Set once the current path contains anything nvgScissor cannot express.
-        bool m_pathHasNonRect{false};
-        // Set when clip() had such a path and had to fall back to path emulation.
-        bool m_isClipped{false};
-
         std::shared_ptr<arcana::cancellation_source> m_cancellationSource{};
         JsRuntimeScheduler m_runtimeScheduler;
 
         std::unordered_map<const NativeCanvasImage*, int> m_nvgImageIndices;
         void BindFillStyle(const Napi::CallbackInfo& info);
-        void FlushGraphicResources() override;
+
         void PlayPath2D(const NativeCanvasPath2D* path);
         void SetFilterStack();
 
@@ -163,6 +170,6 @@ namespace Babylon::Polyfills::Internal
         // Shared drawImage body: draws the nanovg image (arity 3/5/9) and mirrors it to the CPU buffer.
         void DrawImageCommon(const Napi::CallbackInfo& info, int imageIndex, const uint8_t* srcPixels, uint32_t srcWidth, uint32_t srcHeight);
 
-        friend class Canvas;
+        friend class NativeCanvasDawn;
     };
 }
