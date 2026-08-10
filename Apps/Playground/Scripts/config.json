@@ -241,7 +241,7 @@
             "title": "LightFalloff",
             "playgroundId": "#20OAV9#11218",
             "referenceImage": "lightFalloff.png",
-            "reason": "renders black on WebGPU/Dawn (100% pixel diff)"
+            "reason": "not a Dawn bug: the scene sets maxSimultaneousLights=10, and Babylon.js declares one uniform buffer per light in the vertex shader, so the PBR vertex stage needs 10 light UBOs + Scene + Mesh + Material = 13. WebGPU's maxUniformBuffersPerShaderStage is 12 and D3D12 adapters report 12 as their maximum, so CreateBindGroupLayout is rejected and nothing draws. Fails the same way in a browser on WebGPU."
         },
         {
             "title": "Chromatic aberration",
