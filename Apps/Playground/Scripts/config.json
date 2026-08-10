@@ -14,11 +14,10 @@
             "referenceImage": "gsplat-update-data.png"
         },
         {
-            "excludedGraphicsApis": ["WebGPU"],
             "title": "Native Canvas",
             "playgroundId": "#TKVFSA#8",
             "referenceImage": "native-canvas.png",
-            "reason": "Error: Invalid argument while creating the scene on WebGPU/Dawn"
+            "replace": "dynamicTexture.clear();,dynamicTexture.clear(); dynamicTexture.update();"
         },
         {
             "title": "EXR Loader",
