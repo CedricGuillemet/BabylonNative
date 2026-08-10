@@ -7,6 +7,7 @@
 #include "ContextDawn.h"
 
 #include "Colors.h"
+#include "Font.h"
 #include "nanovg/nanovg_dawn.h"
 
 #include <napi/pointer.h>
@@ -101,15 +102,17 @@ namespace Babylon::Plugins::Internal
 
     void NativeCanvasDawn::LoadTTF(const Napi::CallbackInfo& info)
     {
+        if (info.Length() < 1 || !info[0].IsString())
+        {
+            throw Napi::TypeError::New(info.Env(), "Canvas.loadTTF expects the font name as a string in argument 1.");
+        }
+
         // don't allow same font to be loaded more than once
         // why? because ContextDawn doesn't update nvgCreateFontMem when old fontBuffer released
         auto fontName = info[0].As<Napi::String>().Utf8Value();
         if (fontsInfos.find(fontName) == fontsInfos.end())
         {
-            const auto buffer = info[1].As<Napi::ArrayBuffer>();
-            std::vector<uint8_t> fontBuffer(buffer.ByteLength());
-            std::memcpy(fontBuffer.data(), static_cast<uint8_t*>(buffer.Data()), buffer.ByteLength());
-            fontsInfos[fontName] = std::move(fontBuffer);
+            fontsInfos[fontName] = Babylon::Polyfills::Internal::GetFontDataArgument(info, 1, "Canvas.loadTTF");
         }
     }
 
