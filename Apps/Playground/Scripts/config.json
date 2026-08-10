@@ -4583,7 +4583,7 @@
             "playgroundId": "#WSAFDA#0",
             "referenceImage": "gsplat-splat-gltf.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (36.513%)"
+            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
         },
         {
             "title": "Gaussian Splatting LOD",
@@ -4772,7 +4772,7 @@
             "referenceImage": "gsplat-sogs-sh-nolookup.png",
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "crashes on WebGPU/Dawn"
+            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 fails to compile the splat effect ('Error compiling effect' / 'Unable to compile effect') and then hangs without ever completing. Excluded on every API"
         },
         {
             "title": "Gaussian Splatting Debug Part Test",
@@ -4781,7 +4781,7 @@
             "renderCount": 5,
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "fails on WebGPU/Dawn"
+            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
         },
         {
             "title": "Gaussian Splatting Debug Part Auto Tracking Test",
@@ -4790,7 +4790,7 @@
             "renderCount": 5,
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "fails on WebGPU/Dawn"
+            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
         },
         {
             "title": "Gaussian Splatting Part Serialize Test",
@@ -4798,14 +4798,14 @@
             "referenceImage": "gsplat-part-test.png",
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "fails on WebGPU/Dawn"
+            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
         },
         {
             "title": "Gaussian Splatting Loading RH",
             "playgroundId": "#CID4NN#398",
             "referenceImage": "gsplat-loading-rh.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (7.797%)"
+            "reason": "shared failure, both backends fail but for different reasons: bgfx/D3D11 throws 'Reference data length (720000) must match render data length (960000)' -- the reference PNG decodes to 3 channels there while the readback is 4, so no comparison ever runs. Dawn compares normally and is 7.797% off the reference"
         },
         {
             "title": "needDepthPrePass material plugin variants",
@@ -4822,7 +4822,7 @@
             "renderCount": 60,
             "errorRatio": 0.1,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (10.243%)"
+            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
         },
         {
             "title": "GPUPicker Depth Point and Normal",
@@ -4836,7 +4836,7 @@
             "playgroundId": "#AYZY4Q#34",
             "referenceImage": "procedural-textures-3d.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (48.472%)"
+            "reason": "shared failure, not Dawn-specific: both backends miss the reference by a wide margin (bgfx/D3D11 34.228%, Dawn 48.472%, allowed 2.5%)"
         },
         {
             "title": "Iridescence NME",
@@ -4849,7 +4849,7 @@
             "playgroundId": "#ARLADE#23",
             "referenceImage": "sprite-maps.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (96.170%)"
+            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 crashes with an access violation (c0000005). Excluded on every API"
         },
         {
             "title": "Spotlight shadows",
@@ -4862,14 +4862,14 @@
             "playgroundId": "#HATGQZ#3",
             "referenceImage": "Sliders.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (5.491%)"
+            "reason": "shared failure, not Dawn-specific: both backends are off by nearly the same amount (bgfx/D3D11 6.414%, Dawn 6.242%, allowed 2.5%)"
         },
         {
             "title": "Pointers",
             "playgroundId": "#1GLEJK#5",
             "referenceImage": "pointers.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (4.690%)"
+            "reason": "shared failure, both backends fail but for different reasons: bgfx/D3D11 throws 'ReferenceError: PointerEvent is not defined' -- the PointerEvent constructor is not polyfilled -- while Dawn runs the scene and is 6.350% off the reference (allowed 2.5%)"
         },
         {
             "title": "FAST snapshot CPU particles",
@@ -4891,7 +4891,7 @@
             "sceneFilename": "WCafe.babylon",
             "referenceImage": "WCafe.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (34.653%)"
+            "reason": "shared failure, not Dawn-specific: both backends are off by nearly the same amount (bgfx/D3D11 36.415%, Dawn 34.653%, allowed 2.5%)"
         },
         {
             "title": "Espilit",
@@ -4907,7 +4907,7 @@
             "referenceImage": "TheCar.png",
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (90.795%)"
+            "reason": "shared failure, not Dawn-specific: both backends produce the identical 90.795% pixel difference (allowed 5%), so the cause is upstream of the graphics API"
         },
         {
             "title": "Viper",
@@ -4922,7 +4922,7 @@
             "sceneFilename": "Retail.babylon",
             "referenceImage": "retail.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (21.276%)"
+            "reason": "shared failure, both backends fail but for different reasons: bgfx/D3D11 throws 'Reference data length (720000) must match render data length (960000)' -- the reference PNG decodes to 3 channels there while the readback is 4, so no comparison ever runs. Dawn compares normally and is 21.276% off the reference"
         },
         {
             "title": "Hill Valley",
@@ -4930,7 +4930,7 @@
             "sceneFilename": "HillValley.incremental.babylon",
             "referenceImage": "Hillvalley.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (93.177%)"
+            "reason": "shared failure, both backends fail but for different reasons: bgfx/D3D11 throws 'Reference data length (720000) must match render data length (960000)' -- the reference PNG decodes to 3 channels there while the readback is 4, so no comparison ever runs. Dawn compares normally and is 93.177% off the reference"
         },
         {
             "title": "Heart",
@@ -4967,7 +4967,7 @@
             "referenceImage": "charting.png",
             "errorRatio": 3,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (16.629%)"
+            "reason": "genuinely Dawn-specific: bgfx/D3D11 passes at 2.004% but Dawn is 16.715% off the reference (allowed 3%)"
         },
         {
             "title": "Fog",
@@ -5015,7 +5015,7 @@
             "referenceImage": "GUI.png",
             "errorRatio": 4,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 is the one that never becomes ready: it prints 'Running GUI' and then hangs indefinitely (still hung after 300s). Excluded on every API"
         },
         {
             "title": "Procedural textures",
