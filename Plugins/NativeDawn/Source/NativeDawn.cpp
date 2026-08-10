@@ -290,9 +290,40 @@ namespace Babylon::Plugins::NativeDawn
                 return false;
             }
 
+            // Request every limit the adapter actually supports.
+            //
+            // WebGPU deliberately hands out a device with the *default* (i.e.
+            // lowest-common-denominator) limits unless the caller opts in via
+            // requiredLimits. Babylon.js reports the device limits up through
+            // engine caps and builds render targets accordingly, so leaving
+            // this unset silently caps us far below the hardware: a G-buffer of
+            // RGBA32Float + RGBA16Float + RGBA16Float + RGBA8Unorm needs
+            // maxColorAttachmentBytesPerSample >= 40, while the default is 32
+            // and typical desktop adapters support 128. Dawn then rejects the
+            // render pass, every command buffer built from it becomes invalid,
+            // and the scene surfaces an opaque "Invalid argument" to JS.
+            // Passing the adapter's own limits back as the required limits is
+            // always valid (they are by definition supported) and is the
+            // standard way to say "give me everything this adapter has".
+            WGPULimits supportedLimits{WGPU_LIMITS_INIT};
+            const bool haveLimits =
+                wgpuAdapterGetLimits(g_state.adapter, &supportedLimits) == WGPUStatus_Success;
+            if (!haveLimits)
+            {
+                DawnLog(LogLevel::Warn, "wgpuAdapterGetLimits failed -- falling back to default device limits");
+            }
+            else
+            {
+                // The chain belongs to the adapter query; requesting it back as
+                // a required limit would ask Dawn to honour extension structs we
+                // did not populate.
+                supportedLimits.nextInChain = nullptr;
+            }
+
             // Device.
             WGPUDeviceDescriptor devDesc{
                 .label = EmptyStringView(),
+                .requiredLimits = haveLimits ? &supportedLimits : nullptr,
                 .defaultQueue = {
                     .label = EmptyStringView(),
                 },
