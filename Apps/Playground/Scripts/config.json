@@ -4583,7 +4583,7 @@
             "playgroundId": "#WSAFDA#0",
             "referenceImage": "gsplat-splat-gltf.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (36.513%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (36.513%)"
         },
         {
             "title": "Gaussian Splatting LOD",
@@ -4591,7 +4591,7 @@
             "referenceImage": "gsplat-lod.png",
             "renderCount": 15,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "renders correctly but at a lower LOD than the reference (29.2% pixel diff). Previously failed outright with 'Error: Invalid argument' because NativeDawn requested a device with WebGPU default limits, so this scene's G-buffer exceeded maxColorAttachmentBytesPerSample (40 needed vs 32 default); that is fixed, the remaining diff is LOD selection/streaming"
+            "reason": "shared failure, not Dawn-specific: bgfx/D3D11 fails too, with 'Error compiling effect' followed by runaway memory growth. Dawn renders but selects a lower LOD than the reference (29.2% pixel diff). Previously failed outright with 'Error: Invalid argument' because NativeDawn requested a device with WebGPU default limits, so this scene's G-buffer exceeded maxColorAttachmentBytesPerSample (40 needed vs 32 default); that is fixed, the remaining diff is LOD selection/streaming"
         },
         {
             "title": "MSAA RTT samples=4 (magnified)",
@@ -4805,7 +4805,7 @@
             "playgroundId": "#CID4NN#398",
             "referenceImage": "gsplat-loading-rh.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (7.797%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (7.797%)"
         },
         {
             "title": "needDepthPrePass material plugin variants",
@@ -4822,7 +4822,7 @@
             "renderCount": 60,
             "errorRatio": 0.1,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (10.243%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (10.243%)"
         },
         {
             "title": "GPUPicker Depth Point and Normal",
@@ -4836,7 +4836,7 @@
             "playgroundId": "#AYZY4Q#34",
             "referenceImage": "procedural-textures-3d.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (48.472%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (48.472%)"
         },
         {
             "title": "Iridescence NME",
@@ -4849,7 +4849,7 @@
             "playgroundId": "#ARLADE#23",
             "referenceImage": "sprite-maps.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (96.170%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (96.170%)"
         },
         {
             "title": "Spotlight shadows",
@@ -4862,14 +4862,14 @@
             "playgroundId": "#HATGQZ#3",
             "referenceImage": "Sliders.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (5.491%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (5.491%)"
         },
         {
             "title": "Pointers",
             "playgroundId": "#1GLEJK#5",
             "referenceImage": "pointers.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (4.690%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (4.690%)"
         },
         {
             "title": "FAST snapshot CPU particles",
@@ -4891,7 +4891,7 @@
             "sceneFilename": "WCafe.babylon",
             "referenceImage": "WCafe.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (34.653%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (34.653%)"
         },
         {
             "title": "Espilit",
@@ -4907,7 +4907,7 @@
             "referenceImage": "TheCar.png",
             "errorRatio": 5,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (90.795%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (90.795%)"
         },
         {
             "title": "Viper",
@@ -4922,7 +4922,7 @@
             "sceneFilename": "Retail.babylon",
             "referenceImage": "retail.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (21.276%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (21.276%)"
         },
         {
             "title": "Hill Valley",
@@ -4930,7 +4930,7 @@
             "sceneFilename": "HillValley.incremental.babylon",
             "referenceImage": "Hillvalley.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (93.177%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (93.177%)"
         },
         {
             "title": "Heart",
@@ -4967,7 +4967,7 @@
             "referenceImage": "charting.png",
             "errorRatio": 3,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (16.629%\r)"
+            "reason": "pixel diff vs reference on WebGPU/Dawn (16.629%)"
         },
         {
             "title": "Fog",
@@ -5043,7 +5043,7 @@
             "playgroundId": "#EIJH8L#27",
             "referenceImage": "ktx2decoder.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "scene never becomes ready on WebGPU/Dawn (shader/asset)"
+            "reason": "shared failure, not Dawn-specific: bgfx/D3D11 fails too with 'Loading textures from IInternalTextureLoader not yet implemented' -- KTX2 texture loading is unimplemented on Babylon Native. On Dawn the same gap presents as the scene never becoming ready (timeout) instead of a thrown error."
         },
         {
             "title": "Screen space reflections",
@@ -5348,7 +5348,7 @@
             "referenceImage": "arc-legacy-inertia-comparison.png",
             "renderCount": 30,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (99.990%\r)"
+            "reason": "shared failure, not Dawn-specific: bgfx/D3D11 fails too. The rendered frame is 4x the reference (render 3840000 bytes vs reference 960000), so validation throws 'Reference data length must match render data length' before any pixel comparison happens"
         },
         {
             "title": "ArcRotate legacy panningInertia glide",
