@@ -493,13 +493,24 @@ namespace Babylon::Plugins::Internal
         }
 
         // Babylon resizes the DOM canvas directly (dynamicTexture.getContext()
-        // then canvas.width = n), so re-sync before flushing.
+        // then canvas.width = n), so re-sync before flushing. Only propagate a
+        // real size change: assigning the same value is the idiomatic way to
+        // clear a canvas, so doing it unconditionally on every upload would
+        // discard everything drawn since the previous flush (e.g. the first of
+        // two consecutive DynamicTexture.drawText calls).
         const uint32_t w = domCanvas.Get("width").ToNumber().Uint32Value();
         const uint32_t h = domCanvas.Get("height").ToNumber().Uint32Value();
         if (w != 0 && h != 0)
         {
-            nvgCanvas.Set("width", Napi::Number::New(env, w));
-            nvgCanvas.Set("height", Napi::Number::New(env, h));
+            if (nvgCanvas.Get("width").ToNumber().Uint32Value() != w)
+            {
+                nvgCanvas.Set("width", Napi::Number::New(env, w));
+            }
+
+            if (nvgCanvas.Get("height").ToNumber().Uint32Value() != h)
+            {
+                nvgCanvas.Set("height", Napi::Number::New(env, h));
+            }
         }
 
         Napi::Value ctxVal = nvgCanvas.Get("_context");
