@@ -798,6 +798,30 @@
         }, undefined, undefined, true);
     };
 
+    // The WebGPU engine loads its GLSL -> SPIR-V -> WGSL transpilers (the glslang
+    // and twgsl WASM modules) lazily, on the first effect that is authored in
+    // GLSL: _preparePipelineContextAsync awaits prepareGlslangAndTintAsync()
+    // whenever shaderLanguage is GLSL and _glslangAndTintAreFullyLoaded is false.
+    // That await makes the *first* GLSL effect compile asynchronously no matter
+    // what, even with disableParallelShaderCompilation, so a scene that probes
+    // effect.isReady() right after createEffect sees false and takes its "not
+    // ready" branch. Whether it sees true then depends purely on whether some
+    // earlier test already warmed the modules, which makes results depend on test
+    // ordering (a test can pass in a full run and fail in isolation). Warm the
+    // transpilers once up front so every test starts from the same state.
+    const warmShaderTranspilersThen = function (engine, next) {
+        if (typeof engine.prepareGlslangAndTintAsync !== "function") {
+            next();
+            return;
+        }
+        engine.prepareGlslangAndTintAsync().then(next, function (e) {
+            // Non-fatal: only GLSL-authored shaders need these, and they will
+            // retry the load on first use.
+            console.error("Failed to preload glslang/twgsl: " + e);
+            next();
+        });
+    };
+
     if (isDawn) {
         // The WebGPU engine completes initAsync asynchronously, pumped by the
         // host frame loop (RenderFrame -> frame() -> requestAnimationFrame).
@@ -808,7 +832,9 @@
         const waitForEngine = function () {
             if (globalThis.__dawnEngine) {
                 globalThis.__dawnEngine.getCaps().parallelShaderCompile = undefined;
-                loadFontThen(startValidation);
+                warmShaderTranspilersThen(globalThis.__dawnEngine, function () {
+                    loadFontThen(startValidation);
+                });
             } else {
                 setTimeout(waitForEngine, 16);
             }

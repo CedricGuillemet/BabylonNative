@@ -2992,8 +2992,6 @@
         },
         {
             "title": "Synchronous Effect",
-            "excludedGraphicsApis": ["WebGPU"],
-            "reason": "pixel diff vs reference on WebGPU/Dawn (24.835%) when run in isolation",
             "playgroundId": "#D9XXL3#1",
             "referenceImage": "Synchronous-Effect.png"
         },
