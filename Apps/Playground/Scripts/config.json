@@ -4966,8 +4966,8 @@
             "playgroundId": "#FX57Z1#0",
             "referenceImage": "charting.png",
             "errorRatio": 3,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "genuinely Dawn-specific: bgfx/D3D11 passes at 2.004% but Dawn is 16.715% off the reference (allowed 3%)"
+            "excludedGraphicsApis": ["D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "verified passing on D3D11 (2.004%) and WebGPU/Dawn (allowed 3%) and re-enabled there; still excluded on the APIs that were not measured. Previously excluded everywhere and blamed on Dawn: the Dawn canvas cleared itself on every texture upload, so the first of the scene's two drawText calls was discarded"
         },
         {
             "title": "Fog",
