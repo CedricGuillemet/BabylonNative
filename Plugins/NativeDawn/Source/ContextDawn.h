@@ -119,8 +119,12 @@ namespace Babylon::Plugins::Internal
         std::shared_ptr<NVGcontext*> m_nvg;
 
         Font m_font;
-        std::variant<std::string, CanvasGradient*> m_fillStyle{};
-        std::string m_strokeStyle{};
+        // Holds a strong reference to the gradient's JS wrapper: the CanvasGradient is
+        // destroyed by its finalizer, and `ctx.fillStyle = ctx.createLinearGradient(...)`
+        // leaves no other reference for the collector to find.
+        using GradientStyle = std::shared_ptr<Napi::ObjectReference>;
+        std::variant<std::string, GradientStyle> m_fillStyle{};
+        std::variant<std::string, GradientStyle> m_strokeStyle{};
         std::string m_lineCap{};  // 'butt', 'round', 'square'
         std::string m_lineJoin{}; // 'round', 'bevel', 'miter'
 
@@ -139,8 +143,8 @@ namespace Babylon::Plugins::Internal
 
         struct SavedStyle
         {
-            std::variant<std::string, CanvasGradient*> fillStyle;
-            std::string strokeStyle;
+            std::variant<std::string, GradientStyle> fillStyle;
+            std::variant<std::string, GradientStyle> strokeStyle;
         };
         std::vector<SavedStyle> m_savedStyles;
 
@@ -155,6 +159,7 @@ namespace Babylon::Plugins::Internal
 
         std::unordered_map<const NativeCanvasImage*, int> m_nvgImageIndices;
         void BindFillStyle(const Napi::CallbackInfo& info);
+        void BindStrokeStyle(const Napi::CallbackInfo& info);
 
         void PlayPath2D(const NativeCanvasPath2D* path);
         void SetFilterStack();

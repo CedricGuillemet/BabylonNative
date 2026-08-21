@@ -181,14 +181,36 @@ namespace Babylon::Plugins::Internal
             const auto color = str.empty() ? nvgRGBA(255, 255, 255, 255) : StringToColor(info.Env(), str);
             nvgFillColor(*m_nvg, color);
         }
-        else if (std::holds_alternative<CanvasGradient*>(m_fillStyle))
+        else if (std::holds_alternative<GradientStyle>(m_fillStyle))
         {
-            CanvasGradient* gradient = std::get<CanvasGradient*>(m_fillStyle);
+            CanvasGradient* gradient = CanvasGradient::Unwrap(std::get<GradientStyle>(m_fillStyle)->Value());
             nvgFillPaint(*m_nvg, gradient->Paint());
         }
         else
         {
             throw Napi::Error::New(info.Env(), "Fillstyle is not a color string or a gradient.");
+        }
+    }
+
+    void ContextDawn::BindStrokeStyle(const Napi::CallbackInfo& info)
+    {
+        if (std::holds_alternative<std::string>(m_strokeStyle))
+        {
+            const auto& str = std::get<std::string>(m_strokeStyle);
+            // Treat unset/empty strokeStyle as opaque black -- both the Canvas2D default
+            // ("#000000") and nvg's default stroke color -- instead of the transparent black
+            // StringToColor("") would return.
+            const auto color = str.empty() ? nvgRGBA(0, 0, 0, 255) : StringToColor(info.Env(), str);
+            nvgStrokeColor(*m_nvg, color);
+        }
+        else if (std::holds_alternative<GradientStyle>(m_strokeStyle))
+        {
+            CanvasGradient* gradient = CanvasGradient::Unwrap(std::get<GradientStyle>(m_strokeStyle)->Value());
+            nvgStrokePaint(*m_nvg, gradient->Paint());
+        }
+        else
+        {
+            throw Napi::Error::New(info.Env(), "Strokestyle is not a color string or a gradient.");
         }
     }
 
@@ -234,12 +256,15 @@ namespace Babylon::Plugins::Internal
         }
         else
         {
-            return Napi::External<CanvasGradient>::New(Env(), std::get<CanvasGradient*>(m_fillStyle));
+            return std::get<GradientStyle>(m_fillStyle)->Value();
         }
     }
 
     void ContextDawn::SetFillStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
+        // Per spec the setter takes (DOMString or CanvasGradient or CanvasPattern); anything
+        // else stringifies, fails color parsing and is ignored. Test for the gradient rather
+        // than for "is an object", so `ctx.fillStyle = {}` cannot reach Unwrap.
         if (value.IsString())
         {
             auto string = value.As<Napi::String>().Utf8Value();
@@ -247,23 +272,39 @@ namespace Babylon::Plugins::Internal
             m_fillStyle = string;
             nvgFillColor(*m_nvg, color);
         }
-        else
+        else if (CanvasGradient::IsInstance(info.Env(), value))
         {
-            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(info[0].As<Napi::Object>());
-            m_fillStyle = canvasGradient;
+            m_fillStyle = std::make_shared<Napi::ObjectReference>(Napi::Persistent(value.As<Napi::Object>()));
         }
     }
 
     Napi::Value ContextDawn::GetStrokeStyle(const Napi::CallbackInfo&)
     {
-        return Napi::Value::From(Env(), m_strokeStyle);
+        if (std::holds_alternative<std::string>(m_strokeStyle))
+        {
+            return Napi::Value::From(Env(), std::get<std::string>(m_strokeStyle));
+        }
+        else
+        {
+            return std::get<GradientStyle>(m_strokeStyle)->Value();
+        }
     }
 
     void ContextDawn::SetStrokeStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        m_strokeStyle = value.As<Napi::String>().Utf8Value();
-        auto color = StringToColor(info.Env(), m_strokeStyle);
-        nvgStrokeColor(*m_nvg, color);
+        // strokeStyle accepts a CanvasGradient just like fillStyle does; GUI controls such as
+        // Line and the border of a Button assign one directly.
+        if (value.IsString())
+        {
+            auto string = value.As<Napi::String>().Utf8Value();
+            const auto color = StringToColor(info.Env(), string);
+            m_strokeStyle = string;
+            nvgStrokeColor(*m_nvg, color);
+        }
+        else if (CanvasGradient::IsInstance(info.Env(), value))
+        {
+            m_strokeStyle = std::make_shared<Napi::ObjectReference>(Napi::Persistent(value.As<Napi::Object>()));
+        }
     }
 
     Napi::Value ContextDawn::GetLineWidth(const Napi::CallbackInfo&)
@@ -292,6 +333,7 @@ namespace Babylon::Plugins::Internal
             PlayPath2D(path);
         }
 
+        BindFillStyle(info);
         nvgFill(*m_nvg);
     }
 
@@ -479,6 +521,7 @@ namespace Babylon::Plugins::Internal
         const auto height = info[3].As<Napi::Number>().FloatValue();
 
         nvgRect(*m_nvg, left, top, width, height);
+        BindStrokeStyle(info);
         SetFilterStack();
         nvgStroke(*m_nvg);
     }
@@ -569,6 +612,7 @@ namespace Babylon::Plugins::Internal
             PlayPath2D(path);
         }
 
+        BindStrokeStyle(info);
         SetFilterStack();
         nvgStroke(*m_nvg);
     }
@@ -1399,6 +1443,7 @@ namespace Babylon::Plugins::Internal
 
         if (SetFontFaceId())
         {
+            BindStrokeStyle(info);
             nvgStrokeText(*m_nvg, x, y, text.c_str(), nullptr);
         }
     }
