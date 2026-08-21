@@ -3687,9 +3687,17 @@ namespace Babylon::Plugins::NativeDawn
             return ab;
         }
 
+        // 2D context methods read their canvas back off `this` rather than
+        // capturing it: getContext caches the context on the canvas, so a
+        // captured strong reference would form a JS->native->JS cycle that V8
+        // cannot collect, pinning the canvas and its pixel buffer forever.
+        Napi::Object CtxCanvas(const Napi::CallbackInfo& info)
+        {
+            return info.This().As<Napi::Object>().Get("canvas").As<Napi::Object>();
+        }
+
         Napi::Object Make2DContext(Napi::Env env, Napi::Object canvas)
         {
-            auto canvasRef = std::make_shared<Napi::ObjectReference>(Napi::Persistent(canvas));
             auto ctm = std::make_shared<Ctm>();
             Napi::Object ctx = Napi::Object::New(env);
             ctx.Set("canvas", canvas);
@@ -3740,11 +3748,11 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(ctx, "lineTo", Noop);
             SetMethod(ctx, "rect", Noop);
             SetMethod(ctx, "clip", Noop);
-            SetMethod(ctx, "fillText", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(ctx, "fillText", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 // Text rasterization is not supported on the WebGPU backend (the
                 // bgfx/nanovg Canvas polyfill is unavailable). Ensure the backing
                 // buffer exists so the canvas is still a valid texture source.
-                EnsureCanvasBuffer(info.Env(), canvasRef->Value());
+                EnsureCanvasBuffer(info.Env(), CtxCanvas(info));
                 return info.Env().Undefined();
             });
             SetMethod(ctx, "strokeText", Noop);
@@ -3752,8 +3760,8 @@ namespace Babylon::Plugins::NativeDawn
             // Path / shape ops we don't rasterize (GUI backgrounds, rounded rects,
             // arcs). No-ops keep the canvas a valid texture source; strokeRect just
             // ensures the backing buffer exists like fillRect.
-            SetMethod(ctx, "strokeRect", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
-                EnsureCanvasBuffer(info.Env(), canvasRef->Value());
+            SetMethod(ctx, "strokeRect", [](const Napi::CallbackInfo& info) -> Napi::Value {
+                EnsureCanvasBuffer(info.Env(), CtxCanvas(info));
                 return info.Env().Undefined();
             });
             SetMethod(ctx, "arc", Noop);
@@ -3785,14 +3793,14 @@ namespace Babylon::Plugins::NativeDawn
             SetMethod(ctx, "getContextAttributes", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 return Napi::Object::New(info.Env());
             });
-            SetMethod(ctx, "fillRect", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
-                EnsureCanvasBuffer(info.Env(), canvasRef->Value());
+            SetMethod(ctx, "fillRect", [](const Napi::CallbackInfo& info) -> Napi::Value {
+                EnsureCanvasBuffer(info.Env(), CtxCanvas(info));
                 return info.Env().Undefined();
             });
 
-            SetMethod(ctx, "clearRect", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(ctx, "clearRect", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                Napi::Object canvas = canvasRef->Value();
+                Napi::Object canvas = CtxCanvas(info);
                 Napi::ArrayBuffer ab = EnsureCanvasBuffer(env, canvas);
                 const int cw = static_cast<int>(canvas.Get("width").ToNumber().Uint32Value());
                 const int ch = static_cast<int>(canvas.Get("height").ToNumber().Uint32Value());
@@ -3814,7 +3822,7 @@ namespace Babylon::Plugins::NativeDawn
                 return env.Undefined();
             });
 
-            SetMethod(ctx, "drawImage", [canvasRef, ctm](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(ctx, "drawImage", [ctm](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 if (info.Length() < 3 || !info[0].IsObject()) return env.Undefined();
                 Napi::Object img = info[0].As<Napi::Object>();
@@ -3849,7 +3857,7 @@ namespace Babylon::Plugins::NativeDawn
                     dw = iw; dh = ih;
                 }
 
-                Napi::Object canvas = canvasRef->Value();
+                Napi::Object canvas = CtxCanvas(info);
                 Napi::ArrayBuffer ab = EnsureCanvasBuffer(env, canvas);
                 const int cw = static_cast<int>(canvas.Get("width").ToNumber().Uint32Value());
                 const int ch = static_cast<int>(canvas.Get("height").ToNumber().Uint32Value());
@@ -3879,9 +3887,9 @@ namespace Babylon::Plugins::NativeDawn
                 return env.Undefined();
             });
 
-            SetMethod(ctx, "getImageData", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(ctx, "getImageData", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
-                Napi::Object canvas = canvasRef->Value();
+                Napi::Object canvas = CtxCanvas(info);
                 Napi::ArrayBuffer ab = EnsureCanvasBuffer(env, canvas);
                 const int cw = static_cast<int>(canvas.Get("width").ToNumber().Uint32Value());
                 const int ch = static_cast<int>(canvas.Get("height").ToNumber().Uint32Value());
@@ -3914,7 +3922,7 @@ namespace Babylon::Plugins::NativeDawn
                 return res;
             });
 
-            SetMethod(ctx, "putImageData", [canvasRef](const Napi::CallbackInfo& info) -> Napi::Value {
+            SetMethod(ctx, "putImageData", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 Napi::Env env = info.Env();
                 if (!info[0].IsObject()) return env.Undefined();
                 Napi::Object imgData = info[0].As<Napi::Object>();
@@ -3924,7 +3932,7 @@ namespace Babylon::Plugins::NativeDawn
                 const uint32_t ih = PropU32(imgData, "height", 0);
                 Bytes src = GetBytes(imgData.Get("data"));
                 if (src.data == nullptr || iw == 0 || ih == 0) return env.Undefined();
-                Napi::Object canvas = canvasRef->Value();
+                Napi::Object canvas = CtxCanvas(info);
                 Napi::ArrayBuffer ab = EnsureCanvasBuffer(env, canvas);
                 const int cw = static_cast<int>(canvas.Get("width").ToNumber().Uint32Value());
                 const int ch = static_cast<int>(canvas.Get("height").ToNumber().Uint32Value());
@@ -4685,7 +4693,12 @@ namespace Babylon::Plugins::NativeDawn
                     img.Set("complete", Napi::Boolean::New(env, false));
                     img.Set("_src", Napi::String::New(env, ""));
                     SetMethod(img, "decode", [](const Napi::CallbackInfo& info) -> Napi::Value {
-                        return Napi::Promise::Deferred::New(info.Env()).Promise();
+                        // Decoding already happened in the `src` setter. Returning a
+                        // never-settling promise here strands Babylon's
+                        // _createImageBitmapFromSource, which awaits decode().
+                        auto d = Napi::Promise::Deferred::New(info.Env());
+                        d.Resolve(info.Env().Undefined());
+                        return d.Promise();
                     });
                     SetMethod(img, "addEventListener", [](const Napi::CallbackInfo& info) -> Napi::Value {
                         Napi::Object self = info.This().As<Napi::Object>();
@@ -4696,21 +4709,28 @@ namespace Babylon::Plugins::NativeDawn
                     });
                     SetMethod(img, "removeEventListener", Noop);
 
-                    // Define the async-decoding `src` accessor.
-                    auto imgRef = std::make_shared<Napi::ObjectReference>(Napi::Persistent(img));
+                    // Define the async-decoding `src` accessor. The setter must not
+                    // capture a strong reference to `img`: the accessor is installed
+                    // on `img` itself, so a captured Napi::Persistent forms a
+                    // JS->native->JS cycle that V8's GC cannot break, pinning every
+                    // Image (and its decoded pixel ArrayBuffer) for the whole
+                    // process. Take the reference per assignment instead and drop it
+                    // once the decode settles.
                     Napi::Object desc = Napi::Object::New(env);
                     desc.Set("configurable", Napi::Boolean::New(env, true));
                     desc.Set("get", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                         return info.This().As<Napi::Object>().Get("_src");
                     }));
-                    desc.Set("set", Napi::Function::New(env, [imgRef](const Napi::CallbackInfo& info) -> Napi::Value {
+                    desc.Set("set", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                         Napi::Env env = info.Env();
                         Napi::Value v = info.Length() > 0 ? info[0] : env.Undefined();
+                        auto imgRef = std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>()));
                         imgRef->Value().Set("_src", v);
                         Napi::Value p = ToArrayBuffer(env, v);
                         Napi::Function onAb = Napi::Function::New(env, [imgRef](const Napi::CallbackInfo& info) -> Napi::Value {
                             Napi::Env env = info.Env();
                             Napi::Object img = imgRef->Value();
+                            imgRef->Reset();
                             Napi::Object bmp = DecodeToBitmap(env, info.Length() > 0 ? info[0] : env.Undefined());
                             img.Set("width", bmp.Get("width"));
                             img.Set("naturalWidth", bmp.Get("width"));
@@ -4729,10 +4749,12 @@ namespace Babylon::Plugins::NativeDawn
                         });
                         Napi::Function onErr = Napi::Function::New(env, [imgRef](const Napi::CallbackInfo& info) -> Napi::Value {
                             Napi::Env env = info.Env();
-                            Napi::Value onerror = imgRef->Value().Get("onerror");
+                            Napi::Object img = imgRef->Value();
+                            imgRef->Reset();
+                            Napi::Value onerror = img.Get("onerror");
                             if (onerror.IsFunction())
                             {
-                                onerror.As<Napi::Function>().Call(imgRef->Value(), {info.Length() > 0 ? info[0] : env.Undefined()});
+                                onerror.As<Napi::Function>().Call(img, {info.Length() > 0 ? info[0] : env.Undefined()});
                             }
                             return env.Undefined();
                         });
