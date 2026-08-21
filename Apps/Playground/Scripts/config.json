@@ -3132,7 +3132,7 @@
             "title": "Clustered Lighting (lhs pbr material)",
             "playgroundId": "#CSCJO2#60",
             "excludeFromAutomaticTesting": true,
-            "reason": "Chakra cannot parse the modern JS syntax; passes on WebGPU/Dawn in isolation but fails with an 84.552% pixel diff after earlier tests in the normal 400-499 chunk",
+            "reason": "Chakra cannot parse the modern JS syntax; passes on WebGPU/Dawn (the order-dependent pixel diff was a leaked PBRBaseMaterial.ForceGLSL, now reset between tests)",
             "referenceImage": "Clustered-Lighting-lhs-pbr-material-.png"
         },
         {
