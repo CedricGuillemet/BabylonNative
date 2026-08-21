@@ -2109,8 +2109,7 @@
         {
             "title": "Test updateTextureData",
             "playgroundId": "#EVX1DH#80",
-            "referenceImage": "testUpdateTextureData.png",
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"]
+            "referenceImage": "testUpdateTextureData.png"
         },
         {
             "title": "Material Plugin",
@@ -2221,22 +2220,16 @@
         {
             "title": "GUI Gradient Linear",
             "playgroundId": "#XCPP9Y#17227",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "GUI-Gradient-Linear.png"
         },
         {
             "title": "GUI Gradient Radial",
             "playgroundId": "#4Z7EK3",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "GUI-Gradient-Radial.png"
         },
         {
             "title": "GUI Gradient Linear with transparency",
             "playgroundId": "#PFK1Z5",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "GUI-Gradient-Linear-with-transparency.png"
         },
         {

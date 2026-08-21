@@ -1,5 +1,9 @@
 #include <regex>
 #include <sstream>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 #include <cstring>
 
@@ -85,9 +89,8 @@ namespace Babylon::Polyfills::Internal
         else
         {
             throw Napi::TypeError::New(env, std::string{methodName} + " expects the font data to be an ArrayBuffer or "
-                "an ArrayBuffer view, but got " + DescribeValue(value) + ". If the font was fetched with "
-                "Tools.LoadFileAsync, request it as binary -- the signature is LoadFileAsync(url, useArrayBuffer), "
-                "and a text response decodes the font to an unusable string.");
+                "an ArrayBuffer view, but got " + DescribeValue(value) + ". A font fetched as text rather than "
+                "binary decodes to an unusable string and arrives this way.");
         }
 
         if (byteLength == 0)
@@ -140,7 +143,12 @@ namespace Babylon::Polyfills::Internal
                     // Babylon GUI composes exactly this string
                     // ("normal normal 18px Arial") from its default font style
                     // and weight.
-                    font.m_weight = std::stoi(match[1]);
+                    //
+                    // std::stoi throws std::out_of_range just as fatally for a digit run too
+                    // long for an int, and WEIGHT_REGEX bounds neither the length nor the
+                    // magnitude, so parse without exceptions and clamp to the CSS 1-1000 range.
+                    const std::string weightText{match[1].str()};
+                    font.m_weight = static_cast<int>(std::clamp(std::strtol(weightText.c_str(), nullptr, 10), 1L, 1000L));
                 }
             }
             else
@@ -154,7 +162,16 @@ namespace Babylon::Polyfills::Internal
             return std::nullopt;
         }
         begin = match[0].second;
-        font.m_size = std::stof(match[1]);
+        // SIZE_REGEX accepts an exponent, so "18e999px" parses as a valid size that std::stof
+        // would reject with a fatal std::out_of_range. strtof saturates to infinity instead;
+        // reject a non-finite size outright rather than handing it to nanovg.
+        const std::string sizeText{match[1].str()};
+        const float size = std::strtof(sizeText.c_str(), nullptr);
+        if (!std::isfinite(size))
+        {
+            return std::nullopt;
+        }
+        font.m_size = size;
 
         if (std::regex_search(begin, end, match, FAMILY_IDENT_REGEX))
         {

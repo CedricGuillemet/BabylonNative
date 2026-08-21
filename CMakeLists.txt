@@ -35,7 +35,7 @@ FetchContent_Declare(base-n
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(bgfx.cmake
     GIT_REPOSITORY https://github.com/BabylonJS/bgfx.cmake.git
-    GIT_TAG 5c98749de48e8609a62e5c1fd2cfffbbd970588e
+    GIT_TAG 9e56bab41272eda16460539465f97724eec94a23
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
@@ -423,25 +423,14 @@ if(MSVC)
     # MSVC turns /OPT:REF and /OPT:ICF off whenever /DEBUG is passed, and CMake's
     # default RelWithDebInfo link flags are "/debug /INCREMENTAL". The effect is that
     # RelWithDebInfo keeps every unreferenced COMDAT that made it into the static
-    # libraries. Measured on a Windows/D3D12 Playground build with NativeDawn enabled,
-    # Playground.exe went from 26,670,592 bytes to 8,902,144 bytes (-66.6%; .text
-    # 19,636,736 -> 6,209,536) with identical validation results.
+    # libraries.
     #
-    # /OPT:REF alone captures the entire win here (/OPT:ICF measured zero additional
+    # /OPT:REF alone captures the entire win (/OPT:ICF measured zero additional
     # bytes), so identical functions are left unfolded and stack traces stay
     # unambiguous. Incremental linking must be off because it is incompatible with
     # /OPT:REF. Debug is left untouched, and Release/MinSizeRel already get /OPT:REF
     # implicitly because they do not link with /DEBUG.
-    foreach(BABYLON_NATIVE_LINKER_FLAGS
-        CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
-        CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO
-        CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO)
-        set(BABYLON_NATIVE_FLAGS "${${BABYLON_NATIVE_LINKER_FLAGS}}")
-        string(REPLACE "/INCREMENTAL:NO" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
-        string(REPLACE "/INCREMENTAL" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
-        string(REPLACE "/OPT:REF" "" BABYLON_NATIVE_FLAGS "${BABYLON_NATIVE_FLAGS}")
-        set(${BABYLON_NATIVE_LINKER_FLAGS} "${BABYLON_NATIVE_FLAGS} /INCREMENTAL:NO /OPT:REF")
-    endforeach()
+    add_link_options($<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO> $<$<CONFIG:RelWithDebInfo>:/OPT:REF>)
 endif()
 
 if(NOT ENABLE_RTTI)
