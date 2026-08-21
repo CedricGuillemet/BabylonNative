@@ -558,10 +558,25 @@
             const request = new XMLHttpRequest();
             request.open('GET', config.root + test.scriptToRun, true);
 
-            request.onreadystatechange = function () {
+            // Babylon Native's XMLHttpRequest polyfill only dispatches to
+            // addEventListener; assigning the DOM on<event> properties silently
+            // does nothing and the load hangs forever.
+            let handled = false;
+            request.addEventListener('readystatechange', function () {
                 if (request.readyState === 4) {
                     try {
-                        request.onreadystatechange = null;
+                        if (handled) {
+                            return;
+                        }
+                        handled = true;
+
+                        // The polyfill sets readyState=4 before raising 'error',
+                        // so a failed fetch reaches here first.
+                        if (request.status < 200 || request.status >= 300) {
+                            console.error("Failed to load " + test.scriptToRun + ": status " + request.status);
+                            failTest(done);
+                            return;
+                        }
 
                         let scriptToRun = request.responseText.replace(/..\/..\/assets\//g, config.root + "/Assets/");
                         scriptToRun = scriptToRun.replace(/..\/..\/Assets\//g, config.root + "/Assets/");
@@ -617,11 +632,15 @@
                         failTest(done);
                     }
                 }
-            };
-            request.onerror = function () {
+            });
+            request.addEventListener('error', function () {
+                if (handled) {
+                    return;
+                }
+                handled = true;
                 console.error("Network error during test load.");
                 failTest(done);
-            }
+            });
 
             request.send(null);
         }
