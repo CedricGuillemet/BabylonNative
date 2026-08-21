@@ -76,6 +76,9 @@
     let missingRefCount = 0;
     const failedTitles = [];
 
+    // BABYLON classes exposing a static ForceGLSL, discovered lazily once.
+    let forceGlslOwners;
+
     function getExclusionReason(t) {
         if (t.onlyVisual) {
             return "onlyVisual";
@@ -671,6 +674,37 @@
         // that needs snapshot mode re-enables it in its own createScene.
         if (typeof engine.snapshotRendering !== "undefined") {
             engine.snapshotRendering = false;
+        }
+
+        // Reset the per-class ForceGLSL statics. "Test code inlining" (#YG3BBF#51)
+        // sets BABYLON.PBRBaseMaterial.ForceGLSL = true and never restores it. On
+        // bgfx that is a no-op (GLSL is the only path), but on WebGPU it pushes
+        // every later PBR material onto the GLSL transpiler, which then rejects
+        // shader includes that rely on the WGSL path -- the Atmosphere scenes fail
+        // to compile ("unexpected SAMPLER2D") and never become ready. Collect the
+        // classes once, then restore the default before each test; a test that
+        // wants GLSL sets it again in its own createScene.
+        if (forceGlslOwners === undefined) {
+            forceGlslOwners = [];
+            for (const key of Object.keys(BABYLON)) {
+                let value;
+                try {
+                    value = BABYLON[key];
+                } catch (e) {
+                    continue;
+                }
+                if ((typeof value === "function" || (value && typeof value === "object")) &&
+                    Object.getOwnPropertyDescriptor(value, "ForceGLSL")) {
+                    forceGlslOwners.push(value);
+                }
+            }
+        }
+        for (const owner of forceGlslOwners) {
+            try {
+                owner.ForceGLSL = false;
+            } catch (e) {
+                // Read-only on some classes; nothing to restore in that case.
+            }
         }
 
         if (generateReferences) {
