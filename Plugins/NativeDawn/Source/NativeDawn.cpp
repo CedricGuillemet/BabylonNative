@@ -1411,19 +1411,19 @@ namespace Babylon::Plugins::NativeDawn
         uint32_t g_requestedWidth = 0;
         uint32_t g_requestedHeight = 0;
 
-        // Reconfiguring a surface destroys every texture it has already handed
-        // out. Babylon acquires the frame's texture in _startMainRenderPass and
-        // only submits it in endFrame/flushFramebuffer, so reconfiguring in
-        // between kills the texture the in-flight command buffer references and
-        // Dawn rejects the submit with "Destroyed texture ... used in a submit",
-        // losing the whole frame. Babylon does resize from inside the render loop
-        // (setHardwareScalingLevel -> resize -> setSize), so a resize is recorded
-        // here and applied only while no texture is outstanding.
+        // Reconfiguring a surface destroys every texture it has handed out, so it must not
+        // happen while work targeting one has been recorded but not submitted - Dawn would
+        // reject the submit with "Destroyed texture ... used in a submit". That is what
+        // g_surfaceWorkPending tracks. Merely holding an acquired texture is not a reason to
+        // wait; it is released here and reacquired at the new size. Waiting on it instead
+        // starves the resize, and since Babylon reallocates its depth attachment
+        // synchronously inside setSize, every frame until the surface catches up renders a
+        // new-size depth against an old-size surface and fails validation.
         void ApplyPendingSurfaceResize()
         {
             if (g_requestedWidth == 0 || g_requestedHeight == 0) return;
             if (g_requestedWidth == g_state.width && g_requestedHeight == g_state.height) return;
-            if (g_currentTextureAcquired) return;
+            if (g_surfaceWorkPending) return;
             if (!g_surfaceConfigured || g_state.surface == nullptr || g_state.device == nullptr) return;
 
             g_state.width = g_requestedWidth;
@@ -1434,6 +1434,9 @@ namespace Babylon::Plugins::NativeDawn
                 wgpuTextureRelease(g_state.currentSurfaceTexture);
                 g_state.currentSurfaceTexture = nullptr;
             }
+            // The reconfigure destroys the texture the surface handed out, so it can no
+            // longer be presented; the next acquire replaces it.
+            g_currentTextureAcquired = false;
 
             WGPUSurfaceConfiguration cfg{
                 .device = g_state.device,
