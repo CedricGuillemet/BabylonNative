@@ -4574,7 +4574,7 @@
             "playgroundId": "#WSAFDA#0",
             "referenceImage": "gsplat-splat-gltf.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
+            "reason": "shared failure: bgfx/D3D11 fails, and Dawn is 36.513% off the reference (allowed 2.5%). An earlier reason claimed Dawn passed; re-measured 2026-08-24 and it does not"
         },
         {
             "title": "Gaussian Splatting LOD",
@@ -4762,8 +4762,8 @@
             "playgroundId": "#QA2662#24",
             "referenceImage": "gsplat-sogs-sh-nolookup.png",
             "errorRatio": 5,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 fails to compile the splat effect ('Error compiling effect' / 'Unable to compile effect') and then hangs without ever completing. Excluded on every API"
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "bgfx/D3D11 fails to compile the splat effect ('Error compiling effect' / 'Unable to compile effect') and then hangs; Dawn passes at 0.019% against the 5% errorRatio, so WebGPU keeps the coverage"
         },
         {
             "title": "Gaussian Splatting Debug Part Test",
@@ -4771,8 +4771,8 @@
             "referenceImage": "gsplat-debug-part-test.png",
             "renderCount": 5,
             "errorRatio": 5,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "bgfx/D3D11 fails; Dawn passes at 1.530% against the 5% errorRatio, so WebGPU keeps the coverage"
         },
         {
             "title": "Gaussian Splatting Debug Part Auto Tracking Test",
@@ -4780,16 +4780,16 @@
             "referenceImage": "gsplat-debug-part-auto-tracking-test.png",
             "renderCount": 5,
             "errorRatio": 5,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "bgfx/D3D11 fails; Dawn passes at 2.190% against the 5% errorRatio, so WebGPU keeps the coverage"
         },
         {
             "title": "Gaussian Splatting Part Serialize Test",
             "playgroundId": "#XQZVOI#0",
             "referenceImage": "gsplat-part-test.png",
             "errorRatio": 5,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "bgfx/D3D11 fails; Dawn passes at 0.748% against the 5% errorRatio, so WebGPU keeps the coverage"
         },
         {
             "title": "Gaussian Splatting Loading RH",
@@ -4812,8 +4812,8 @@
             "referenceImage": "needDepthPrePassExtendedMaterialFamilies.png",
             "renderCount": 60,
             "errorRatio": 0.1,
-            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test; bgfx/D3D11 is the one that fails. Excluded on every API"
+            "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal"],
+            "reason": "bgfx/D3D11 fails; Dawn matches the reference exactly, so WebGPU keeps the coverage"
         },
         {
             "title": "GPUPicker Depth Point and Normal",
@@ -4840,7 +4840,7 @@
             "playgroundId": "#ARLADE#23",
             "referenceImage": "sprite-maps.png",
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 crashes with an access violation (c0000005). Excluded on every API"
+            "reason": "bgfx/D3D11 crashes with an access violation (c0000005); Dawn renders but is 96.170% off the reference. An earlier reason claimed Dawn passed; re-measured 2026-08-24 and it does not"
         },
         {
             "title": "Spotlight shadows",
@@ -5006,7 +5006,7 @@
             "referenceImage": "GUI.png",
             "errorRatio": 4,
             "excludedGraphicsApis": ["D3D11", "D3D12", "OpenGL", "Vulkan", "Metal", "WebGPU"],
-            "reason": "not Dawn-specific -- Dawn passes this test. bgfx/D3D11 is the one that never becomes ready: it prints 'Running GUI' and then hangs indefinitely (still hung after 300s). Excluded on every API"
+            "reason": "bgfx/D3D11 never becomes ready: it prints 'Running GUI' and then hangs indefinitely (still hung after 300s). Dawn renders but is 4.066% off against the 4% errorRatio. An earlier reason claimed Dawn passed; re-measured 2026-08-24 and it just misses"
         },
         {
             "title": "Procedural textures",
