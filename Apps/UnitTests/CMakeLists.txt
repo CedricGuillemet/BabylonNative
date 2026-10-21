@@ -3,6 +3,7 @@ if(NOT((WIN32 AND NOT WINDOWS_STORE) OR (APPLE AND NOT IOS) OR (UNIX AND NOT AND
 endif()
 
 option(BABYLON_NATIVE_TESTS_USE_NOOP_METAL_DEVICE "Use a noop Metal device for Apple platforms." OFF)
+option(BABYLON_NATIVE_TESTS_FAKE_XR "Compile the real NativeXr plugin against a fake xr backend so UnitTests can drive it on desktop." ${APPLE})
 
 set(BABYLONJS_ASSETS
     "../node_modules/babylonjs/babylon.max.js")
@@ -60,6 +61,7 @@ set(SOURCES
     "Source/Tests.NativeEngine.TextureFormats.cpp"
     "Source/Tests.NativeOptimizations.cpp"
     "Source/Tests.NativeEngine.VertexArray.cpp"
+    "Source/Tests.NativeXr.EndFrame.cpp"
     "Source/Tests.ShaderCache.cpp"
     "Source/Tests.ShaderCache.TransformFeedback.cpp"
     "Source/Tests.ShaderCompilation.cpp"
@@ -144,6 +146,35 @@ endif()
 if(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE)
     target_link_libraries(UnitTests PRIVATE NativeCapture)
     target_compile_definitions(UnitTests PRIVATE HAS_NATIVE_CAPTURE)
+endif()
+
+# NativeXr is only added to the build on Android and iOS, where a platform xr library (ARCore/ARKit)
+# exists. To exercise its frame scheduling on desktop, compile the unmodified plugin sources into a
+# test-only library (not the shipping NativeXr target, so nothing else picks it up) and link them
+# against a fake xr backend that provides the xr::System / Session / Frame API without a device.
+if(BABYLON_NATIVE_TESTS_FAKE_XR AND BABYLON_NATIVE_PLUGIN_NATIVEXR)
+    file(GLOB NATIVEXR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeXr/Source/*.cpp")
+    add_library(UnitTestsNativeXr STATIC
+        ${NATIVEXR_SOURCES}
+        "FakeXr/FakeXr.cpp"
+        "FakeXr/FakeXr.h")
+    warnings_as_errors(UnitTestsNativeXr)
+
+    target_include_directories(UnitTestsNativeXr
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeXr/Include"
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../Dependencies/xr/Include"
+        PUBLIC "FakeXr")
+
+    target_link_libraries(UnitTestsNativeXr
+        PUBLIC napi
+        PUBLIC arcana
+        PRIVATE bgfx
+        PRIVATE GraphicsDeviceContext
+        PRIVATE JsRuntimeInternal)
+
+    set_property(TARGET UnitTestsNativeXr PROPERTY FOLDER Apps)
+    target_link_libraries(UnitTests PRIVATE UnitTestsNativeXr)
+    target_compile_definitions(UnitTests PRIVATE HAS_FAKE_XR)
 endif()
 
 # NativeDraco and NativeMeshopt default to OFF, so link and exercise them only when the
